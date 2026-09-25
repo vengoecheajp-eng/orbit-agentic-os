@@ -1,0 +1,47 @@
+{
+  "name": "orbit-agentic-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first control plane for repositories and AI coding agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vengoecheajp-eng/orbit-agentic-os.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vengoecheajp-eng/orbit-agentic-os/issues"
+  },
+  "homepage": "https://github.com/vengoecheajp-eng/orbit-agentic-os#readme",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:orbit": "node scripts/dev-orbit.mjs",
+    "server": "node --env-file-if-exists=.env server.mjs",
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "npm run build && vitest run",
+    "personal:migrate-data": "node scripts/migrate-personal-data.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "security:check": "npm audit --omit=dev && npm run release:check"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "express": "^5.2.1",
+    "lucide-react": "^1.47.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "smol-toml": "^1.9.0",
+    "vite": "^8.3.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "playwright-core": "^1.63.0",
+    "vitest": "^5.0.1"
+  }
+}

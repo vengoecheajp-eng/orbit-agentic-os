@@ -1,0 +1,10 @@
+[
+  {
+    "id": "example-project",
+    "name": "Example project",
+    "repoPath": "",
+    "githubRepo": "",
+    "mode": "unlinked",
+    "summary": "Add a local Git repository and optional GitHub repository."
+  }
+]
