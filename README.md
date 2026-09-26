@@ -6,6 +6,14 @@ Orbit Agentic OS is a local-first control plane for a portfolio of repositories 
 
 ![Orbit local-first workflow](docs/assets/orbit-local-first-workflow.svg)
 
+## See Orbit in action
+
+![Orbit Agentic OS demo showing projects, model selection, and the Executive Review Inbox](docs/assets/orbit-demo.gif)
+
+Track every project, choose the provider and exact model for each task, and
+approve verified changes from one local control plane. This recording uses only
+the safe example workspace described in [docs/DEMO.md](docs/DEMO.md).
+
 ## Demo flow
 
 1. Create a local profile in the welcome screen.
