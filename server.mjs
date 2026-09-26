@@ -18,6 +18,7 @@ import { editableSourcePath } from './workspace-patch.mjs';
 import { agentToolProtocol, executeAgentTool, parseAgentAction } from './agent-tools.mjs';
 import { checkpointPrompt, createRunCheckpoint } from './run-context.mjs';
 import { mountNativeSkill, nativeSkillDirective, skillPackagePrompt } from './skill-runtime.mjs';
+import { evaluationSummary, normalizeProjectBrain, scanProjectCompatibility, SKILL_RUNTIME_CONTRACT, WORKFLOW_LIBRARY } from './project-intelligence.mjs';
 import { STARTER_GITIGNORE, blueprintMarkdown, blueprintPrompt, blueprintTasks, normalizeBlueprint, parseModelJson, readmeMarkdown, slugify, templateBlueprint } from './foundry.mjs';
 import { declaresDependencies, dependencyRequestHash, hasDependencyChanges } from './dependency-gate.mjs';
 import { ECOSYSTEMS, classifyPath, detectProjects, diffParsed, hasEcosystemMarker, makefileChecks, pyprojectDependencies, rawDiff, registryLookup, stepLabel } from './ecosystems.mjs';
@@ -3154,6 +3155,8 @@ app.put('/api/profile', (req, res) => {
 });
 app.delete('/api/profile', (_req, res) => { if (existsSync(PROFILE_FILE)) writeFileSync(PROFILE_FILE, '', { mode: 0o600 }); res.status(204).end(); });
 app.get('/api/skills', (_req, res) => res.json(readdirSync(SKILLS_DIR).filter(file => file.endsWith('.json')).flatMap(file => { try { const skill = JSON.parse(readFileSync(join(SKILLS_DIR, file), 'utf8')); const { systemPrompt, ...safe } = skill; return [safe]; } catch { return []; } })));
+app.get('/api/skills/runtime', (_req, res) => res.json({ ok: true, runtime: SKILL_RUNTIME_CONTRACT }));
+app.get('/api/workflows', (_req, res) => res.json({ ok: true, workflows: WORKFLOW_LIBRARY }));
 app.get('/api/skills/catalog', (_req, res) => {
   const imported = new Set(readdirSync(SKILLS_DIR).filter(file => file.endsWith('.json')).map(file => file.replace(/\.json$/, '')));
   const local = agencySkillsCatalog().map(skill => ({ ...skill, imported: imported.has(`agency-${basename(dirname(skill.path)).toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`) }));
@@ -4024,6 +4027,39 @@ app.post('/api/projects/:id/memory/refresh', (req, res) => {
 
   updateProjectMemory(project, content);
   res.json({ ok: true, message: 'Project tech stack refreshed from repository.', content, scan });
+});
+app.post('/api/projects/:id/memory/normalize', (req, res) => {
+  const project = readProjects().find(p => p.id === req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const content = normalizeProjectBrain(readProjectMemory(project), project, scanProjectStack(project.repoPath));
+  updateProjectMemory(project, content);
+  res.json({ ok: true, message: 'Project Brain now includes goals, decisions, risks, and runtime compatibility sections.', content });
+});
+app.get('/api/projects/:id/compatibility', (req, res) => {
+  const project = readProjects().find(p => p.id === req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  res.json({ ok: true, projectId: project.id, report: scanProjectCompatibility(project.repoPath) });
+});
+app.get('/api/projects/:id/evaluations', (req, res) => {
+  const project = readProjects().find(p => p.id === req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const groups = new Map();
+  for (const file of readdirSync(RUNS_DIR).filter(file => file.endsWith('.json'))) {
+    try {
+      const run = JSON.parse(readFileSync(join(RUNS_DIR, file), 'utf8'));
+      if (run.projectId !== project.id || !run.evaluation || !run.groupId) continue;
+      const group = groups.get(run.groupId) || { groupId: run.groupId, label: run.evaluationLabel || 'Model evaluation', createdAt: run.createdAt, runs: [] };
+      group.runs.push(run);
+      if (String(run.createdAt || '') > String(group.createdAt || '')) group.createdAt = run.createdAt;
+      groups.set(run.groupId, group);
+    } catch { /* One malformed historical run must not hide the rest. */ }
+  }
+  const evaluations = [...groups.values()].map(group => ({
+    ...group,
+    summary: evaluationSummary(group.runs),
+    runs: group.runs.map(run => ({ id: run.id, provider: run.provider, model: run.model, status: run.status, gateStatus: run.gateStatus, changedFiles: run.changedFiles || [], estimatedCostUsd: run.estimatedCostUsd || 0 }))
+  })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 12);
+  res.json({ ok: true, evaluations });
 });
 app.get('/api/projects/:id/summary-brief', (req, res) => {
   const project = readProjects().find(item => item.id === req.params.id);
@@ -5110,7 +5146,7 @@ app.post('/api/runs/check-collision', (req, res) => {
 });
 
 app.post('/api/runs/parallel', (req, res) => {
-  const { projectId, prompt, providers: requested, models: requestedModels = {}, skillId, allowConcurrent } = req.body;
+  const { projectId, prompt, providers: requested, models: requestedModels = {}, skillId, allowConcurrent, workflowId, evaluationLabel } = req.body;
   if (!projectId || !String(prompt || '').trim()) return res.status(400).json({ error: 'Select a project and provide a prompt.' });
   const selections = req.body.selections || (Array.isArray(requested) ? requested.map(provider => ({ provider, model: requestedModels[provider] })) : []);
   if (!Array.isArray(selections) || selections.length < 2 || selections.length > 3 || selections.some(item => !item || typeof item.provider !== 'string')) return res.status(400).json({ error: 'Select between 2 and 3 model slots.' });
@@ -5120,6 +5156,8 @@ app.post('/api/runs/parallel', (req, res) => {
   if (executionMode === 'code' && !isGitRepo(project.repoPath)) return res.status(422).json({ error: 'Connect a local Git project to compare coding runs.' });
   const skill = skillId ? approvedSkill(skillId) : null;
   if (skillId && !skill) return res.status(422).json({ error: 'Selected skill does not exist or is not approved.' });
+  const workflow = workflowId ? WORKFLOW_LIBRARY.find(item => item.id === workflowId) : null;
+  if (workflowId && !workflow) return res.status(422).json({ error: 'Selected workflow does not exist.' });
 
   if (!allowConcurrent) {
     const collision = detectActiveRunCollisions(projectId);
@@ -5136,7 +5174,7 @@ app.post('/api/runs/parallel', (req, res) => {
     let model;
     try { model = requestedRunModel(provider, selection.model); }
     catch (error) { return res.status(422).json({ error: error.message }); }
-    const run = { id: randomUUID(), groupId, parallel: true, projectId, projectName: project.name, provider, routeReason: 'Parallel model comparison', model, effort: provider === 'claude' ? CLAUDE_EFFORT : null, localMode, prompt: String(prompt).trim(), skillId: skill?.id, skillName: skill?.name, skillHash: skill?.contentHash, status: 'queued', createdAt: new Date().toISOString() };
+    const run = { id: randomUUID(), groupId, parallel: true, evaluation: req.body.evaluation === true, evaluationLabel: String(evaluationLabel || workflow?.name || 'Model evaluation').slice(0, 120), workflowId: workflow?.id, projectId, projectName: project.name, provider, routeReason: req.body.evaluation === true ? 'Evaluation Lab model comparison' : 'Parallel model comparison', model, effort: provider === 'claude' ? CLAUDE_EFFORT : null, localMode, prompt: String(prompt).trim(), skillId: skill?.id, skillName: skill?.name, skillHash: skill?.contentHash, status: 'queued', createdAt: new Date().toISOString() };
     if (allowConcurrent && activeRuns.length) {
       run.concurrent = true;
       run.concurrentWith = activeRuns.map(r => r.id);

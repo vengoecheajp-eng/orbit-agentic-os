@@ -368,7 +368,7 @@ describe('Orbit keyboard and agent workflow regressions', () => {
       await page.getByRole('button', { name: 'Open project', exact: true }).click();
       const workspace = page.locator('.project-workspace-modal');
       await workspace.waitFor();
-      expect(await workspace.locator('.project-workspace-tabs button').allTextContents()).toEqual(['Overview', 'Tasks', 'Preview & delivery', 'Launch review', 'Settings']);
+      expect(await workspace.locator('.project-workspace-tabs button').allTextContents()).toEqual(['Overview', 'Tasks', 'Workflows', 'Model Lab', 'Preview & delivery', 'Launch review', 'Settings']);
       await workspace.getByRole('button', { name: 'Tasks', exact: true }).click();
       await workspace.getByText('Improve navigation', { exact: true }).waitFor();
       await workspace.getByRole('button', { name: 'Preview & delivery', exact: true }).click();

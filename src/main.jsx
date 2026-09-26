@@ -468,7 +468,7 @@ function App() {
       {active === 'settings' && <><LocalProfile profile={profile} onChange={setProfile} copy={copy}/><div className="panel backup-panel" style={{ marginTop: 16 }}><p className="eyebrow">{copy.backupTitle}</p><h2>{copy.backupTitle}</h2><p className="settings-copy">{copy.backupSubtitle}</p><a href="/api/backup" className="new-button" style={{ display: 'inline-flex', textDecoration: 'none', width: 'fit-content', marginTop: 10 }}>{copy.backupBtn}</a></div><div className="panel backup-panel" style={{ marginTop: 16 }}><p className="eyebrow">{copy.tokensAndBalances}</p><h2>{copy.tokensAndBalances}</h2><p className="settings-copy">{language === 'es' ? 'Uso y saldos estimados por proveedor.' : 'Usage and estimated balances per provider.'}</p><button type="button" className="new-button" style={{ width: 'fit-content', marginTop: 10 }} onClick={() => setShowCredits(true)}>{copy.tokensAndBalances}</button></div><SettingsPanel projects={connectedProjects} providers={providers} refresh={loadControlPlane} onOpenGenesis={() => { localStorage.removeItem('orbit-concierge-dismissed'); setShowGenesis(true); }} language={language}/></>}
       </ScreenBoundary>
     </main>
-    {selected && <ProjectModal project={projects.find(p => p.id === selected.id) || selected} runs={runs} copy={copy} onPreview={setPreviewProject} onLogo={setLogoProject} onBrain={setBrainProject} onAdvisor={setAdvisorProject} onSecurity={setSecurityProject} onClose={() => setSelected(null)} onToggle={toggleTask} onRunTask={handleRunTask} onInspectRun={openRunMonitor} onRefresh={loadControlPlane}/>}
+    {selected && <ProjectModal project={projects.find(p => p.id === selected.id) || selected} runs={runs} providers={providers} copy={copy} onPreview={setPreviewProject} onLogo={setLogoProject} onBrain={setBrainProject} onAdvisor={setAdvisorProject} onSecurity={setSecurityProject} onClose={() => setSelected(null)} onToggle={toggleTask} onRunTask={handleRunTask} onInspectRun={openRunMonitor} onRefresh={loadControlPlane}/>}
     {previewProject && <ProjectPreviewModal project={previewProject} copy={copy} onClose={() => setPreviewProject(null)}/>}
     {logoProject && <LogoGeneratorModal project={logoProject} copy={copy} onClose={() => setLogoProject(null)}/>}
     {advisorProject && <LaunchAdvisorModal project={advisorProject} copy={copy} onClose={() => setAdvisorProject(null)} onRunTask={handleRunTask} onRefresh={loadControlPlane}/>}
@@ -995,6 +995,7 @@ function ProjectBrainModal({ project, copy, onClose }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [normalizing, setNormalizing] = useState(false);
   const [notice, setNotice] = useState('');
   const loadMemory = async () => {
     setLoading(true);
@@ -1048,6 +1049,25 @@ function ProjectBrainModal({ project, copy, onClose }) {
       if (await loadMemory()) setNotice(copy.brainScanSuccess);
     } catch (error) { setNotice(error.message); } finally { memoryBusy.current = false; setRefreshing(false); }
   };
+  const normalizeBrain = async () => {
+    if (loading || memoryBusy.current) return;
+    memoryBusy.current = true;
+    setNormalizing(true); setNotice('');
+    try {
+      if (content !== savedContent.current || readDraft() !== null) {
+        const saved = await fetch(`/api/projects/${project.id}/memory`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+        const savedBody = await saved.json().catch(() => ({}));
+        if (!saved.ok) throw new Error(savedBody.error || copy.brainSaveError);
+        savedContent.current = content;
+        clearSavedDraft(content);
+      }
+      const response = await fetch(`/api/projects/${project.id}/memory/normalize`, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || localeText('Could not structure Project Brain.', 'No se pudo estructurar el Cerebro del Proyecto.'));
+      setContent(body.content || content); savedContent.current = body.content || content;
+      setNotice(body.message || localeText('Project Brain structure added without removing existing notes.', 'La estructura del Cerebro del Proyecto se añadió sin borrar notas existentes.'));
+    } catch (error) { setNotice(error.message); } finally { memoryBusy.current = false; setNormalizing(false); }
+  };
 
   return <div className="modal-backdrop brain-backdrop">
     <section ref={dialogRef} className="modal project-brain-modal" role="dialog" aria-modal="true" aria-label={`${project.name} Project Brain`} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); saveMemory(); } }}>
@@ -1056,7 +1076,7 @@ function ProjectBrainModal({ project, copy, onClose }) {
       <div className="brain-path">{memoryPath}</div>
       {loading ? <div className="brain-loading">{copy.brainLoading}</div> : <textarea className="brain-editor" spellCheck="false" readOnly={saving || refreshing} value={content} onChange={event => updateContent(event.target.value)} aria-label={copy.brainEyebrow}/>}
       {notice && <p className="brain-notice" role="status">{notice}</p>}
-      <div className="brain-actions"><button className="text-button brain-rescan" type="button" title="Saves edited rules before refreshing the detected stack" disabled={loading || refreshing || saving} onClick={refreshStack}><RefreshCw size={14} className={refreshing ? 'spin' : ''}/>{refreshing ? copy.brainScanning : copy.brainRescan}</button><button className="new-button" type="button" title="Save rules (⌘/Ctrl+S)" disabled={loading || saving || refreshing} onClick={saveMemory}><Check size={15}/>{saving ? copy.brainSaving : copy.brainSave}</button></div>
+      <div className="brain-actions"><button className="text-button brain-rescan" type="button" title="Adds safe goals, decisions, risks, and runtime sections without deleting your notes" disabled={loading || refreshing || saving || normalizing} onClick={normalizeBrain}><Layers size={14} className={normalizing ? 'spin' : ''}/>{normalizing ? localeText('Structuring…', 'Estructurando…') : localeText('Structure Brain', 'Estructurar cerebro')}</button><button className="text-button brain-rescan" type="button" title="Saves edited rules before refreshing the detected stack" disabled={loading || refreshing || saving || normalizing} onClick={refreshStack}><RefreshCw size={14} className={refreshing ? 'spin' : ''}/>{refreshing ? copy.brainScanning : copy.brainRescan}</button><button className="new-button" type="button" title="Save rules (⌘/Ctrl+S)" disabled={loading || saving || refreshing || normalizing} onClick={saveMemory}><Check size={15}/>{saving ? copy.brainSaving : copy.brainSave}</button></div>
     </section>
   </div>;
 }
@@ -1854,7 +1874,75 @@ function ProjectGitHistory({ project, copy }) {
   if (!history) return <p className="empty-copy">{copy.gitHistoryLoading}</p>;
   return <>{history.commits.map(commit => <div className="history-item" key={commit.hash}><span className="run-status awaiting_review"/><div><strong>{commit.message}</strong><small>{commit.hash} · {commit.author}</small></div></div>)}{history.pulls.map(pr => <div className="history-item" key={`pr-${pr.number}`}><span className="run-status awaiting_input"/><div><strong>PR #{pr.number}: {pr.title}</strong><small>{pr.state} · GitHub</small></div></div>)}{!history.commits.length && !history.pulls.length && <p className="empty-copy">{copy.gitHistoryEmpty}</p>}</>;
 }
-function ProjectModal({ project, runs, copy, onPreview, onLogo, onBrain, onAdvisor, onSecurity, onClose, onToggle, onRunTask, onInspectRun, onRefresh }) {
+function ProjectCompatibilityPanel({ project }) {
+  const [report, setReport] = useState(null);
+  const [error, setError] = useState('');
+  const load = async () => {
+    setError('');
+    try {
+      const response = await fetch(`/api/projects/${project.id}/compatibility`);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Could not inspect compatibility.');
+      setReport(body.report);
+    } catch (reason) { setError(reason.message); }
+  };
+  useEffect(() => { load(); }, [project.id]);
+  if (error) return <p className="empty-copy" role="alert">{error}</p>;
+  if (!report) return <p className="empty-copy">{localeText('Inspecting local runtime compatibility…', 'Inspeccionando compatibilidad local de runtimes…')}</p>;
+  return <section className="project-intelligence-panel">
+    <div className="project-section-heading"><div><p className="eyebrow">{localeText('COMPATIBILITY SCANNER', 'ESCÁNER DE COMPATIBILIDAD')}</p><h3>{localeText('Existing agent configuration, read-only.', 'Configuración existente de agentes, solo lectura.')}</h3></div><button className="text-button" type="button" onClick={load}><RefreshCw size={13}/>{localeText('Scan again', 'Escanear de nuevo')}</button></div>
+    {!report.connected ? <p className="empty-copy">{report.recommendations?.[0]}</p> : <>
+      <div className="compatibility-grid">{report.files.map(file => <div className={`compatibility-item ${file.found ? 'found' : ''}`} key={file.id}><FileText size={14}/><span><strong>{file.path}</strong><small>{file.label}</small></span><em>{file.found ? localeText('Detected', 'Detectado') : localeText('Not found', 'No encontrado')}</em></div>)}</div>
+      <div className="compatibility-section"><strong>{localeText('Project skills', 'Skills del proyecto')}</strong>{report.skillLocations.map(location => <p key={location.path}><code>{location.path}</code> · {location.found ? `${location.skills} ${localeText('SKILL.md package(s)', 'paquete(s) SKILL.md')}` : localeText('not present', 'no presente')}</p>)}</div>
+      <div className="compatibility-section"><strong>{localeText('Safe runtime contract', 'Contrato de runtime seguro')}</strong><p>{report.runtime.standard}</p><p><code>Codex</code> → <code>{report.runtime.codex}</code><br/><code>Claude</code> → <code>{report.runtime.claude}</code></p><small>{report.runtime.safety}</small></div>
+      <div className="compatibility-section"><strong>{localeText('Additional signals', 'Señales adicionales')}</strong><p>{report.mcpFiles.length ? `${localeText('MCP config detected:', 'Configuración MCP detectada:')} ${report.mcpFiles.join(', ')}` : localeText('No MCP configuration detected.', 'No se detectó configuración MCP.')}<br/>{report.githubWorkflows} {localeText('GitHub Actions workflow(s) detected.', 'workflow(s) de GitHub Actions detectado(s).')}</p></div>
+      <ul className="compatibility-recommendations">{report.recommendations.map((item, index) => <li key={index}>{item}</li>)}</ul>
+    </>}
+  </section>;
+}
+
+function ProjectWorkflowLibrary({ project, onStart }) {
+  const [workflows, setWorkflows] = useState([]);
+  const [error, setError] = useState('');
+  useEffect(() => { fetch('/api/workflows').then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error || 'Could not load workflows.'); return body.workflows || []; }).then(setWorkflows).catch(reason => setError(reason.message)); }, []);
+  if (error) return <p className="empty-copy" role="alert">{error}</p>;
+  return <section className="project-intelligence-panel"><div className="project-section-heading"><div><p className="eyebrow">{localeText('REUSABLE WORKFLOWS', 'WORKFLOWS REUTILIZABLES')}</p><h3>{localeText('Start with a proven scope, then choose the model in Agent Console.', 'Empieza con un alcance probado y luego elige el modelo en la consola de agentes.')}</h3></div></div><div className="workflow-library-grid">{workflows.map(workflow => <article key={workflow.id}><span>{workflow.category}</span><h4>{workflow.name}</h4><p>{workflow.description}</p><button className="text-button" type="button" onClick={() => onStart(workflow.name, workflow.prompt)}><Sparkles size={13}/>{localeText('Use workflow', 'Usar workflow')}</button></article>)}</div></section>;
+}
+
+function ProjectEvaluationLab({ project, providers = [], onRefresh }) {
+  const readyProviders = providers.filter(provider => provider.available);
+  const [selected, setSelected] = useState([]);
+  const [prompt, setPrompt] = useState('');
+  const [mode, setMode] = useState('plan');
+  const [evaluations, setEvaluations] = useState([]);
+  const [notice, setNotice] = useState('');
+  const [running, setRunning] = useState(false);
+  const load = async () => {
+    try {
+      const response = await fetch(`/api/projects/${project.id}/evaluations`);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Could not load evaluations.');
+      setEvaluations(body.evaluations || []);
+    } catch (reason) { setNotice(reason.message); }
+  };
+  useEffect(() => { setSelected(readyProviders.slice(0, 2).map(provider => provider.id)); load(); }, [project.id, providers.map(provider => `${provider.id}:${provider.available}`).join('|')]);
+  const toggleProvider = id => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : current.length < 3 ? [...current, id] : current);
+  const runEvaluation = async event => {
+    event.preventDefault();
+    if (selected.length < 2 || !prompt.trim()) return;
+    setRunning(true); setNotice('');
+    try {
+      const response = await fetch('/api/runs/parallel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, prompt: prompt.trim(), selections: selected.map(provider => ({ provider })), executionMode: mode, evaluation: true, evaluationLabel: 'Model Lab comparison', allowConcurrent: false }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Could not start the evaluation.');
+      setNotice(localeText(`${body.runs.length} model runs started. Orbit will compare evidence when they finish.`, `${body.runs.length} ejecuciones iniciadas. Orbit comparará evidencia cuando terminen.`));
+      setPrompt(''); await load(); await onRefresh?.();
+    } catch (reason) { setNotice(reason.message); } finally { setRunning(false); }
+  };
+  return <section className="project-intelligence-panel"><div className="project-section-heading"><div><p className="eyebrow">{localeText('EVALUATION LAB', 'LABORATORIO DE EVALUACIÓN')}</p><h3>{localeText('Compare evidence from two or three models—not writing style alone.', 'Compara evidencia de dos o tres modelos, no solo estilo de redacción.')}</h3></div><button className="text-button" type="button" onClick={load}><RefreshCw size={13}/>{localeText('Refresh', 'Actualizar')}</button></div><form className="evaluation-form" onSubmit={runEvaluation}><label>{localeText('Bounded task', 'Tarea delimitada')}<textarea value={prompt} onChange={event => setPrompt(event.target.value)} rows={3} placeholder={localeText('Example: identify and fix the failing login test.', 'Ejemplo: identifica y corrige la prueba fallida de login.')}/></label><div className="evaluation-options"><div>{readyProviders.map(provider => <label key={provider.id}><input type="checkbox" checked={selected.includes(provider.id)} onChange={() => toggleProvider(provider.id)}/>{provider.label}</label>)}</div><select value={mode} onChange={event => setMode(event.target.value)}><option value="plan">{localeText('Plan only', 'Solo plan')}</option><option value="code">{localeText('Isolated code worktrees', 'Worktrees de código aislados')}</option></select></div><button className="new-button" disabled={running || selected.length < 2 || !prompt.trim()} type="submit"><Cpu size={14}/>{running ? localeText('Starting comparison…', 'Iniciando comparación…') : localeText('Run model evaluation', 'Ejecutar evaluación de modelos')}</button></form>{notice && <p className="run-notice" role="status">{notice}</p>}<div className="evaluation-history">{evaluations.map(evaluation => <article key={evaluation.groupId}><div><strong>{evaluation.label}</strong><small>{new Date(evaluation.createdAt).toLocaleString()} · {evaluation.summary.verified} {localeText('verified', 'verificados')} · {evaluation.summary.attention} {localeText('need attention', 'requieren atención')}</small></div><div>{evaluation.runs.map(run => <span key={run.id} className={`evaluation-run ${run.gateStatus || run.status}`}>{providerName(run.provider)} · {run.gateStatus || run.status}</span>)}</div></article>)}{!evaluations.length && <p className="empty-copy">{localeText('No model evaluations yet.', 'Aún no hay evaluaciones de modelos.')}</p>}</div></section>;
+}
+
+function ProjectModal({ project, runs, providers, copy, onPreview, onLogo, onBrain, onAdvisor, onSecurity, onClose, onToggle, onRunTask, onInspectRun, onRefresh }) {
   const dialogRef = useDialogFocus(onClose);
   const [activeTab, setActiveTab] = useState('overview');
   const [brief, setBrief] = useState(null);
@@ -1923,6 +2011,8 @@ function ProjectModal({ project, runs, copy, onPreview, onLogo, onBrain, onAdvis
   const tabs = [
     ['overview', localeText('Overview', 'Resumen')],
     ['tasks', localeText('Tasks', 'Tareas')],
+    ['workflows', localeText('Workflows', 'Workflows')],
+    ['models', localeText('Model Lab', 'Laboratorio de modelos')],
     ['preview', localeText('Preview & delivery', 'Vista previa y entrega')],
     ['launch', localeText('Launch review', 'Revisión de lanzamiento')],
     ['settings', localeText('Settings', 'Ajustes')]
@@ -1953,6 +2043,9 @@ function ProjectModal({ project, runs, copy, onPreview, onLogo, onBrain, onAdvis
 
         {activeTab === 'tasks' && <section className="project-task-workspace"><div className="project-section-heading"><div><p className="eyebrow">{copy.projectTasks}</p><h3>{localeText('The project plan, one clear step at a time.', 'El plan del proyecto, un paso claro a la vez.')}</h3></div><span>{(project.tasks || []).filter(task => !projectTaskDone(task)).length} {copy.pendingCount}</span></div><ProjectTaskGroups project={project} runs={projectRuns} copy={copy} onToggle={onToggle} onRunTask={onRunTask} onInspectRun={onInspectRun} onRefresh={onRefresh}/></section>}
 
+        {activeTab === 'workflows' && <ProjectWorkflowLibrary project={project} onStart={startTask}/>}
+        {activeTab === 'models' && <ProjectEvaluationLab project={project} providers={providers} onRefresh={onRefresh}/>}
+
         {activeTab === 'preview' && <section className="project-tool-grid">
           <button type="button" onClick={() => onPreview(project)} disabled={project.mode !== 'connected'}><Eye size={20}/><span><strong>{copy.livePreview}</strong><small>{localeText('Open the application in mobile or desktop view.', 'Abre la aplicación en vista móvil o de escritorio.')}</small></span><ChevronRight size={16}/></button>
           <button type="button" onClick={() => setDeploymentProject(project)} disabled={project.mode !== 'connected'}><Rocket size={20}/><span><strong>{localeText('Deploy', 'Publicar')}</strong><small>{localeText('Choose Vercel, Cloudflare, Netlify, or a custom target.', 'Elige Vercel, Cloudflare, Netlify o un destino personalizado.')}</small></span><ChevronRight size={16}/></button>
@@ -1969,6 +2062,7 @@ function ProjectModal({ project, runs, copy, onPreview, onLogo, onBrain, onAdvis
           <div className="project-section-heading"><div><p className="eyebrow">{localeText('PROJECT SETTINGS', 'AJUSTES DEL PROYECTO')}</p><h3>{localeText('Workspace connection and local project record.', 'Conexión del espacio y registro local del proyecto.')}</h3></div></div>
           <article className="project-settings-card"><div><FolderGit2 size={19}/><span><strong>{localeText('Repository', 'Repositorio')}</strong><small>{project.repoPath || project.githubRepo || localeText('No repository connected', 'Sin repositorio conectado')}</small></span></div><p>{localeText('Orbit only references this repository. Removing the project below never deletes local files or the GitHub repository.', 'Orbit solo hace referencia a este repositorio. Eliminar el proyecto abajo nunca borra archivos locales ni el repositorio de GitHub.')}</p></article>
           <ProjectConnection key={project.id} project={project} copy={copy} refresh={onRefresh}/>
+          <ProjectCompatibilityPanel project={project}/>
           <article className="project-danger-zone">
             <div><Trash2 size={19}/><span><strong>{localeText('Remove from Orbit', 'Eliminar de Orbit')}</strong><small>{localeText('Remove this project from your Orbit workspace.', 'Elimina este proyecto de tu espacio de Orbit.')}</small></span></div>
             {!removeConfirmOpen ? <button className="project-remove-button" type="button" onClick={() => setRemoveConfirmOpen(true)}><Trash2 size={14}/>{localeText('Remove project…', 'Eliminar proyecto…')}</button> : <div className="project-remove-confirm" role="alert">
