@@ -1556,14 +1556,16 @@ function commandResult(command, args, options = {}) {
 }
 
 // This only observes the Mac. Orbit never changes firewall or FileVault state.
-function localSecurityPosture() {
+// projectId scopes activeTunnels to a single project's Security Center so one
+// project's public preview never reads as exposure evidence on another project.
+function localSecurityPosture(projectId = null) {
   const isMac = process.platform === 'darwin';
   const fileVaultOutput = isMac ? commandResult('fdesetup', ['status']) : '';
   const firewallOutput = isMac ? commandResult('/usr/libexec/ApplicationFirewall/socketfilterfw', ['--getglobalstate']) : '';
   const statusFrom = (output, enabledPattern) => !isMac ? 'not_applicable' : !output ? 'unknown' : enabledPattern.test(output) ? 'enabled' : 'disabled';
   const projects = readProjects();
   const activeTunnels = [...previewTunnels.entries()]
-    .filter(([, tunnel]) => tunnel?.process?.exitCode === null)
+    .filter(([id, tunnel]) => tunnel?.process?.exitCode === null && (!projectId || id === projectId))
     .map(([projectId, tunnel]) => ({ projectId, projectName: projects.find(project => project.id === projectId)?.name || projectId, startedAt: tunnel.startedAt, url: tunnel.url || null }));
   return {
     platform: process.platform,
@@ -1642,7 +1644,7 @@ async function createSecuritySnapshot(project, { language = 'en', dependencyAudi
   // Unavailable/skipped audits cannot clear previously established findings.
   const completed = ['clean', 'findings'].includes(dependencyAudit?.status);
   const currentAudit = completed ? dependencyAudit : previousSnapshot?.dependencyAudit ?? dependencyAudit ?? null;
-  const center = await buildProjectSecurityCenter(project, { language, dependencyAudit: currentAudit, runtimePosture: localSecurityPosture(), privacyReview: securityReviewFor(project) });
+  const center = await buildProjectSecurityCenter(project, { language, dependencyAudit: currentAudit, runtimePosture: localSecurityPosture(project.id), privacyReview: securityReviewFor(project) });
   applyDependencyFreshness(center, currentAudit, language);
   refreshSecurityGate(center, language);
   const snapshot = writeSecuritySnapshot(project, center, currentAudit);
@@ -4270,7 +4272,7 @@ app.put('/api/projects/:id/security-center/privacy-review', async (req, res) => 
   if (rationale.length < 8 || rationale.length > 1200) return res.status(400).json({ error: 'Provide a short rationale between 8 and 1200 characters.' });
   try {
     const previous = readSecuritySnapshot(project);
-    const draft = await buildProjectSecurityCenter(project, { language: 'en', dependencyAudit: previous?.dependencyAudit || null, runtimePosture: localSecurityPosture(), privacyReview: null });
+    const draft = await buildProjectSecurityCenter(project, { language: 'en', dependencyAudit: previous?.dependencyAudit || null, runtimePosture: localSecurityPosture(project.id), privacyReview: null });
     if (!evidenceFingerprint || draft.privacyReview?.evidenceFingerprint !== evidenceFingerprint) return res.status(409).json({ error: 'Privacy evidence changed. Refresh the Security Center and review the current evidence.' });
     project.securityReviews = { ...(project.securityReviews || {}), privacy: { decision, rationale, evidenceFingerprint, reviewedAt: new Date().toISOString() } };
     writeProjects(projects);

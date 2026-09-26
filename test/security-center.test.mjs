@@ -131,6 +131,24 @@ describe('Security Center local evidence', () => {
     expect(changed.checks.find(check => check.id === 'privacy')?.status).toBe('needs_review');
   });
 
+  it('surfaces an active client portal link as exposure evidence, never silently', async () => {
+    const repoPath = repository();
+    const runtimePosture = { platform: 'darwin', orbitBoundToLoopback: true, firewall: { status: 'enabled' }, fileVault: { status: 'enabled' }, activeTunnels: [] };
+    const withoutLink = await buildProjectSecurityCenter({ id: 'no-portal', name: 'No portal', repoPath }, { language: 'en', runtimePosture });
+    const exposureWithout = withoutLink.checks.find(check => check.id === 'exposure');
+    expect(exposureWithout.status).toBe('pass');
+    expect(exposureWithout.evidence.join(' ')).not.toContain('portal');
+    expect(withoutLink.clientPortalLink).toEqual({ active: false, createdAt: null });
+
+    const project = { id: 'with-portal', name: 'With portal', repoPath, clientShareTokenHash: 'deadbeef', clientShareCreatedAt: '2026-09-20T00:00:00.000Z' };
+    const withLink = await buildProjectSecurityCenter(project, { language: 'en', runtimePosture });
+    expect(withLink.clientPortalLink).toEqual({ active: true, createdAt: '2026-09-20T00:00:00.000Z' });
+    const exposureWith = withLink.checks.find(check => check.id === 'exposure');
+    expect(exposureWith.evidence.some(item => item.includes('Client portal link is active') && item.includes('2026-09-20T00:00:00.000Z'))).toBe(true);
+    expect(exposureWith.detail).toContain('client portal link is active');
+    expect(securityEvidenceMarkdown(withLink)).toContain('Client portal link: active');
+  });
+
   it('creates a red gate for a detected source secret and exports a non-certification report', async () => {
     const repoPath = repository();
     const fakeToken = ['ghp_', 'abcdefghijklmnopqrstuvwxyz1234567890'].join('');

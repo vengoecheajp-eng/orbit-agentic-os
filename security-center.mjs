@@ -191,6 +191,10 @@ export async function buildProjectSecurityCenter(project, options = {}) {
   const privacyStatus = !repository.repoConnected ? 'not_available' : missingTrust.some(item => item.status === 'blocked') ? 'blocked' : missingTrust.length ? 'needs_review' : validPrivacyReview ? 'pass' : 'needs_review';
   const machineStatus = runtime.platform === 'darwin' && (runtime.firewall?.status === 'disabled' || runtime.fileVault?.status === 'disabled') ? 'warning' : runtime.platform === 'darwin' && (runtime.firewall?.status === 'unknown' || runtime.fileVault?.status === 'unknown') ? 'unknown' : 'pass';
   const exposureStatus = runtime.activeTunnels?.length ? 'warning' : 'pass';
+  // A live client-portal token is a standing public exposure surface, just like a
+  // preview tunnel. It is intentional and revocable, but it must never be silent —
+  // the Security Center is where a human notices it and can revoke it.
+  const clientPortalLink = project.clientShareTokenHash ? { active: true, createdAt: project.clientShareCreatedAt || null } : { active: false, createdAt: null };
 
   const checks = [
     check({
@@ -232,10 +236,17 @@ export async function buildProjectSecurityCenter(project, options = {}) {
     }),
     check({
       id: 'exposure', title: text(language, 'Mac and preview exposure', 'Exposición del Mac y vista previa'), status: exposureStatus === 'warning' ? 'warning' : machineStatus,
-      evidence: [runtime.orbitBoundToLoopback ? 'Orbit API bound to 127.0.0.1' : 'Orbit API binding requires review', ...(runtime.activeTunnels || []).map(tunnel => `Active public preview: ${tunnel.projectName || tunnel.projectId}`), runtime.firewall?.evidence, runtime.fileVault?.evidence].filter(Boolean),
+      evidence: [
+        runtime.orbitBoundToLoopback ? 'Orbit API bound to 127.0.0.1' : 'Orbit API binding requires review',
+        ...(runtime.activeTunnels || []).map(tunnel => `Active public preview: ${tunnel.projectName || tunnel.projectId}`),
+        clientPortalLink.active ? text(language, `Client portal link is active${clientPortalLink.createdAt ? ` (created ${clientPortalLink.createdAt})` : ''} — revoke it from Client Portal settings when the engagement ends.`, `El enlace del portal de cliente está activo${clientPortalLink.createdAt ? ` (creado ${clientPortalLink.createdAt})` : ''}; revócalo desde la configuración del portal cuando termine el proyecto.`) : '',
+        runtime.firewall?.evidence, runtime.fileVault?.evidence
+      ].filter(Boolean),
       detail: runtime.activeTunnels?.length
         ? text(language, 'A temporary public preview tunnel is active. It exposes the running preview through a public URL until stopped. Do not use it for production data or internal-only screens.', 'Hay un túnel temporal de vista previa activo. Expone la vista por una URL pública hasta detenerlo. No lo uses con datos de producción o pantallas internas.')
-        : text(language, 'Orbit itself is loopback-only. macOS controls are observed locally when available; changing them remains the device owner’s decision.', 'Orbit está limitado a loopback. Los controles de macOS se observan localmente cuando están disponibles; modificarlos sigue siendo decisión de la persona dueña del equipo.'),
+        : clientPortalLink.active
+          ? text(language, 'A client portal link is active. It stays valid until revoked, so confirm it is still meant to be shared and revoke it once the client engagement is done.', 'Hay un enlace del portal de cliente activo. Permanece válido hasta que se revoque; confirma que siga siendo necesario y revócalo al terminar el proyecto con el cliente.')
+          : text(language, 'Orbit itself is loopback-only. macOS controls are observed locally when available; changing them remains the device owner’s decision.', 'Orbit está limitado a loopback. Los controles de macOS se observan localmente cuando están disponibles; modificarlos sigue siendo decisión de la persona dueña del equipo.'),
       action: text(language, 'Review local exposure', 'Revisar exposición local'), taskTitle: 'Review preview and workstation exposure',
       suggestedPrompt: `Review ${project.name}'s local preview and deployment exposure. Keep developer servers bound to loopback unless deliberately shared, stop unused tunnels, and document any intended public preview access without exposing secrets or production data.`
     })
@@ -254,7 +265,7 @@ export async function buildProjectSecurityCenter(project, options = {}) {
           : text(language, 'No blocking local finding was detected. This does not replace legal, penetration-test, or certification review.', 'No se detectó un bloqueo local. Esto no reemplaza revisión legal, pentest o certificación.'),
       canLaunch: gate.status === 'green'
     },
-    checks, repository, runtime, launchAdvisory: { readinessScore: advisory.readinessScore, launchGate: advisory.launchGate },
+    checks, repository, runtime, clientPortalLink, launchAdvisory: { readinessScore: advisory.readinessScore, launchGate: advisory.launchGate },
     frameworkMappings: []
   };
   center.frameworkMappings = buildFrameworkMappings(center, { language });
@@ -286,6 +297,10 @@ export function securityEvidenceMarkdown(center) {
   }
   lines.push('## Reference control map', '');
   for (const item of center.frameworkMappings) lines.push(`- **${item.area}** — ${item.status}; ${item.nist}; ${item.asvs}; ${item.iso}`);
-  lines.push('', '## Local exposure', '', `- Orbit loopback binding: ${center.runtime.orbitBoundToLoopback ? 'confirmed' : 'review required'}`, `- Active public preview tunnels: ${(center.runtime.activeTunnels || []).length}`);
+  lines.push('', '## Local exposure', '',
+    `- Orbit loopback binding: ${center.runtime.orbitBoundToLoopback ? 'confirmed' : 'review required'}`,
+    `- Active public preview tunnels: ${(center.runtime.activeTunnels || []).length}`,
+    `- Client portal link: ${center.clientPortalLink?.active ? `active${center.clientPortalLink.createdAt ? ` (created ${center.clientPortalLink.createdAt})` : ''}` : 'none'}`
+  );
   return `${lines.join('\n')}\n`;
 }
