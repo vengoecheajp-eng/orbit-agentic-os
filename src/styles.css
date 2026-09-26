@@ -322,7 +322,7 @@ input:focus, textarea:focus, select:focus {
 [data-theme="dark"] .preview-share strong, [data-theme="dark"] .preview-share-controls input { color: #cdd5ff; }
 [data-theme="dark"] .preview-share-controls input { background: rgba(0, 0, 0, .2); }
 .twilio-settings { margin-top: 18px; }
-.twilio-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.twilio-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .twilio-form .whatsapp-enabled { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 8px; }
 .webhook-url, .webhook-help { display: block; margin-top: 10px; color: var(--muted); font: 10px 'DM Mono', monospace; overflow-wrap: anywhere; }
 
@@ -1092,7 +1092,7 @@ input:focus, textarea:focus, select:focus {
 
 /* Ollama Model Store */
 .ollama-catalog-head { display: flex; justify-content: space-between; align-items: center; margin: 16px 0 10px; }
-.ollama-models-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 10px; }
+.ollama-models-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px; margin-top: 10px; }
 .model-store-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; transition: all .15s ease; }
 .model-store-card:hover { border-color: #cbd5e1; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); }
 .model-store-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
@@ -1512,7 +1512,8 @@ body:has(.modal-backdrop) { overflow: hidden; }
 .projects-page-intro h2 { margin: 4px 0 0; font-size: clamp(22px, 2.5vw, 32px); letter-spacing: -.045em; text-wrap: balance; }
 .projects-page-intro > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; text-wrap: pretty; }
 .compact-project-list { gap: 10px; }
-.compact-project-hub { display: grid; grid-template-columns: minmax(230px, 1.25fr) minmax(145px, .65fr) minmax(190px, .9fr) auto; align-items: center; gap: 18px; min-height: 118px; padding: 18px; box-shadow: 0 1px 0 rgba(21, 32, 27, .03); }
+.compact-project-hub { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(108px, .65fr) minmax(0, .9fr) auto; align-items: center; gap: 18px; min-height: 118px; padding: 18px; box-shadow: 0 1px 0 rgba(21, 32, 27, .03); }
+.compact-project-hub > * { min-width: 0; }
 .compact-project-main { min-width: 0; }
 .compact-project-title-row { display: flex; align-items: center; gap: 11px; }
 .project-color-mark { width: 10px; height: 38px; flex: 0 0 10px; border-radius: 999px; background: var(--purple); }
@@ -1634,6 +1635,9 @@ body:has(.modal-backdrop) { overflow: hidden; }
 @media (max-width: 560px) {
   .modal-backdrop { padding: 10px; }
   .modal { max-height: calc(100dvh - 20px); padding: 22px 16px; }
+  /* Keep the last action in any card reachable above the persistent agent dock. */
+  main { padding-bottom: 220px; scroll-padding-bottom: 220px; }
+  .global-agent-dock { right: 12px; bottom: 12px; width: auto; max-width: calc(100vw - 24px); }
   .shortcut-list > div { grid-template-columns: 120px minmax(0, 1fr); gap: 8px; }
   .command-results button { grid-template-columns: 55px minmax(0, 1fr); }
   .command-results button > span { grid-column: 2; }
@@ -1748,6 +1752,9 @@ body:has(.modal-backdrop) { overflow: hidden; }
 /* Dependency approval gate */
 .gate-badge.dependency-approval{background:#fff4e5;color:#9a5b12}
 .run-status.awaiting_dependency_approval{background:#d9982f;box-shadow:0 0 0 3px #d9982f20}
+
+/* Modals must always sit above the compact mobile navigation. */
+.modal-backdrop { z-index: 100; }
 .dependency-review{border:1px solid #f1d7ad;background:#fffaf2;border-radius:12px;padding:14px 16px;margin:12px 0}
 .dependency-review-head p:not(.eyebrow){font-size:12px;line-height:1.55;margin:0 0 8px;color:#5b5243}
 .dependency-manifest{margin-top:10px}
