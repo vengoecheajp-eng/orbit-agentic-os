@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Local-first control plane for repositories and AI coding agents.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vengoecheajp-eng/orbit-agentic-os.git"

@@ -229,6 +229,10 @@ The API is bound to `127.0.0.1`; it is not exposed to your LAN by default.
 
 Orbit Community is currently an early-access macOS alpha. It is tested in CI on Linux for source integrity and with local macOS-oriented runtime features such as worktrees, previews, and optional tunnels. Review every agent change before merging, keep personal data outside the checkout, and use a disposable project first.
 
+## License
+
+Orbit Agentic OS is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [LICENSE](LICENSE) for the complete terms.
+
 ## Demo
 
 The safe, reproducible walkthrough for a public demo is in
