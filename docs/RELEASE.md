@@ -58,3 +58,15 @@ example project.
 - Enable private vulnerability reporting in the GitHub repository settings.
 - Do not claim that cloud providers, WhatsApp, Telegram, or previews are free;
   each service has its own costs and terms.
+
+## 6. Version and release notes
+
+- Update `package.json` and the root package entry in `package-lock.json` to the
+  same semantic version before tagging.
+- Add a dated entry to `CHANGELOG.md` describing user-visible behavior,
+  boundaries, and verification—not internal implementation detail alone.
+- For `v0.3.0-alpha`, mention Project Intelligence: reusable workflows,
+  structured local Project Brain, read-only runtime compatibility scanning, and
+  evidence-led Model Lab comparisons.
+- State clearly that this remains an alpha, a local-first single-user control
+  plane, and that no model comparison chooses or merges a winner automatically.

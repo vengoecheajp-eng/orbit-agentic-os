@@ -1,7 +1,7 @@
 {
   "name": "orbit-agentic-os",
   "private": true,
-  "version": "0.2.0-alpha",
+  "version": "0.3.0-alpha",
   "description": "Local-first control plane for repositories and AI coding agents.",
   "license": "AGPL-3.0-only",
   "repository": {

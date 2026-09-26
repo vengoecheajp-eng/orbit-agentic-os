@@ -30,6 +30,16 @@ Code agents use an isolated Git worktree, and Orbit never pushes, merges, or del
 - Run Codex, Claude, Ollama, or Gemini. Codex/Claude edits happen in `orbit/<run-id>` worktrees and finish in review.
 - Route simple local changes to Ollama and flag larger local tasks for a stronger model.
 - Compare two or three available models in parallel.
+- Use reusable project workflows for focused implementation, verification repair,
+  launch-readiness evidence, safe skill review, and bounded model comparisons.
+- Structure a Project Brain without overwriting existing notes: durable goals,
+  decisions, risks, and runtime compatibility stay in the local project memory.
+- Scan a connected repository read-only for agent instruction files, project
+  skills, MCP configuration filenames, and GitHub Actions signals. Orbit never
+  returns the content of those files or their credentials.
+- Use the Model Lab to compare two or three available models against the same
+  bounded task. It records verification and attention signals rather than
+  declaring a subjective “winner.”
 - Optimize a prompt before dispatch: instant local heuristic cleanup, then optional Ollama-only compression. You review and can edit the result before it is sent.
 - View run status, results, worktree location, and send a follow-up instruction after a result.
 - Configure a local profile, sign out/change profile, and switch between English and Spanish. The chosen language stays in the browser.
@@ -220,6 +230,14 @@ For the complete production-dependency and release-boundary check, run:
 ```bash
 npm run security:check
 ```
+
+### v0.3.0-alpha release scope
+
+This alpha adds **Project Intelligence**: a reusable workflow library,
+structured local Project Brain sections, a read-only compatibility scanner, and
+the Model Lab for evidence-led comparisons. It does not change Orbit's safety
+boundary: skills remain explicitly approved, code changes remain in isolated
+worktrees, and no repository configuration is adopted automatically.
 
 ## Verification
 
