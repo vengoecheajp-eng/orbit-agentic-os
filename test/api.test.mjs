@@ -82,7 +82,7 @@ describe('Orbit local control plane', () => {
     expect(Array.isArray(body.local)).toBe(true);
     expect(Array.isArray(body.recommended)).toBe(true);
     expect(Array.isArray(body.recommendedSources)).toBe(true);
-    expect(body.recommendedSources.map(skill => skill.id)).toEqual(expect.arrayContaining(['strix-security', 'context7-docs', 'openai-docs']));
+    expect(body.recommendedSources.map(skill => skill.id)).toEqual(expect.arrayContaining(['strix-security', 'context7-docs', 'openai-docs', 'claude-seo']));
     expect(body.recommendedSources.every(skill => new URL(skill.sourceUrl).hostname === 'github.com')).toBe(true);
     expect(body.local.every(skill => skill.source === 'Agency Agents · this Mac')).toBe(true);
     expect(body.local.every(skill => !Object.hasOwn(skill, 'systemPrompt'))).toBe(true);

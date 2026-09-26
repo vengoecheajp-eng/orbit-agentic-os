@@ -4,6 +4,12 @@ All notable community-facing changes are recorded here. Orbit follows semantic
 versioning while it remains in alpha: minor versions add capabilities; patch
 versions repair behavior without expanding scope.
 
+## Unreleased
+
+- Added Claude SEO as an upstream **Recommended Skill** reference. It remains
+  inspect-first and opt-in; Orbit does not bundle it, install its runtime,
+  configure credentials, or authorize external services automatically.
+
 ## v0.3.0-alpha — 2026-09-26
 
 ### Added

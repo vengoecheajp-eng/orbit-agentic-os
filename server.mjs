@@ -1504,6 +1504,16 @@ const RECOMMENDED_SKILL_SOURCES = Object.freeze([
     license: 'See source',
     sourceUrl: 'https://github.com/openai/skills/blob/main/skills/.curated/openai-docs/SKILL.md',
     learnMore: 'https://github.com/openai/skills'
+  },
+  {
+    id: 'claude-seo',
+    name: 'Claude SEO',
+    description: 'Claude Code SEO workflows for technical audits, schema, content quality, and AI-search readiness. Review its optional browser, API, and model-cost requirements before approval.',
+    category: 'SEO & Marketing',
+    author: 'Agrici Daniel',
+    license: 'MIT',
+    sourceUrl: 'https://github.com/AgriciDaniel/claude-seo',
+    learnMore: 'https://github.com/AgriciDaniel/claude-seo'
   }
 ]);
 function localSkillFrontmatter(content) {

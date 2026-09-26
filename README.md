@@ -178,6 +178,13 @@ The workflow is: **inspect → pending review / blocked → explicit approval �
 
 When an approved skill is selected for a run, Orbit activates it for that run only. Codex receives a temporary project skill under `.agents/skills/`; Claude receives the same package under `.claude/skills/`. Both can load `SKILL.md`, references, scripts, and assets using their normal native skill discovery. Orbit removes the temporary package before calculating the code diff, so it is never merged into the project. Direct local and API models do not provide a native skill loader, so Orbit supplies the reviewed package as bounded model context instead. Follow-ups and pipeline coding stages keep the same selected skill and integrity hash.
 
+The Recommended Skills catalog includes upstream references such as **Claude SEO**.
+Those entries are not bundled plugins: Orbit still requires a user to inspect the
+exact upstream package and approve it locally. Claude SEO is primarily designed
+for Claude Code and may request optional Python, Playwright, external APIs, or
+more expensive model configurations; Orbit does not install, configure, or pay
+for any of those automatically.
+
 ## Security Center
 
 Each project has a local Security Center that inventories source-like files for credential-shaped values, environment-file handling, manifests and lockfiles, privacy and support routes, macOS controls, and active public preview tunnels. Opening the center records a fresh local evidence snapshot; a manual refresh can run `npm audit --omit=dev` for npm projects with a lockfile. Any prior critical dependency finding stays blocked when repository evidence changes until a successful new audit resolves it.
