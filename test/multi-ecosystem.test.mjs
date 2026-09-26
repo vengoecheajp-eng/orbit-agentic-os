@@ -63,6 +63,8 @@ describe('Completion Gate across ecosystems', () => {
     const { id } = await fixture({ 'notes.txt': 'hello\n' }, worktree => write(worktree, 'notes.txt', 'hello again\n'));
     const run = await verify(id);
     expect(run.gateMessage).toMatch(/nothing was verified automatically/);
+    expect(run.gateStatus).toBe('needs_attention');
+    expect(run.gateChecks.unavailable).toBe(true);
   }, TIMEOUT);
 });
 

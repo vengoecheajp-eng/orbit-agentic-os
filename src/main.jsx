@@ -754,6 +754,10 @@ function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, 
               {item.gateChecks?.error && <pre>{item.gateChecks.error}</pre>}
             </div>}
             {item.gateStatus === 'verified_ready' && item.gateMessage && <p className="inbox-gate-summary">{item.gateMessage}</p>}
+            {item.review?.mode && item.review.mode !== 'off' && <div className={`inbox-gate-message ${item.review.status === 'approved' ? 'verified-ready' : 'needs-attention'}`}>
+              <p><strong>{localeText('Independent review:', 'Revisión independiente:')}</strong> {item.review.status === 'approved' ? localeText('approved current evidence.', 'aprobó la evidencia actual.') : item.review.status === 'changes_requested' ? localeText('requested changes before approval.', 'solicitó cambios antes de aprobar.') : localeText('is inconclusive or still pending.', 'no es concluyente o aún está pendiente.')}</p>
+              {item.review.summary && <p>{item.review.summary}</p>}
+            </div>}
             {!item.dependencyRequest && <GateCheckList checks={item.gateChecks?.checks}/>}
             <div className="inbox-files">
               <strong>{changedFiles.length} changed {changedFiles.length === 1 ? 'file' : 'files'}</strong>
@@ -4554,6 +4558,11 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
   const [followUp, setFollowUp] = useState(savedDraft.text || '');
   const [followUpNotice, setFollowUpNotice] = useState('');
   const [sending, setSending] = useState(false);
+  const [reviewMode, setReviewMode] = useState(run.review?.mode || 'off');
+  const [reviewProvider, setReviewProvider] = useState(run.review?.provider || 'local');
+  const [reviewModel, setReviewModel] = useState(run.review?.model || 'auto');
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewNotice, setReviewNotice] = useState('');
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const { isListening, toggleListening } = useVoiceInput(transcript => setFollowUp(current => current ? `${current} ${transcript}` : transcript));
   const terminalEndRef = useRef(null);
@@ -4576,6 +4585,31 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
   const setFollowUpProvider = nextProvider => {
     setSelectedProvider(nextProvider);
     setSelectedModel('auto');
+  };
+  const reviewerProviders = providers.filter(item => ['local', 'gemini', 'deepseek', 'groq', 'mistral', 'xai'].includes(item.id) && item.available);
+  const selectedReviewer = reviewerProviders.find(item => item.id === reviewProvider);
+  const startIndependentReview = async () => {
+    if (reviewing) return;
+    setReviewing(true); setReviewNotice('');
+    const request = async cloudConsent => fetch(`/api/runs/${run.id}/review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: reviewMode, provider: reviewProvider, model: reviewModel === 'auto' ? undefined : reviewModel, cloudConsent })
+    });
+    try {
+      let response = await request(false);
+      let body = await response.json().catch(() => ({}));
+      if (response.status === 409 && body.requiresCloudConsent) {
+        const allowed = window.confirm(localeText('This sends a limited, redacted diff and verification evidence to the selected cloud reviewer. It does not send your full repository, credentials, or chat history. Continue?', 'Esto envía un diff limitado y redactado junto con evidencia de verificación al revisor cloud seleccionado. No envía el repositorio completo, credenciales ni historial del chat. ¿Continuar?'));
+        if (!allowed) { setReviewNotice(localeText('Cloud review was not started.', 'La revisión cloud no se inició.')); return; }
+        response = await request(true); body = await response.json().catch(() => ({}));
+      }
+      if (!response.ok) throw new Error(body.error || localeText('Independent review could not finish.', 'La revisión independiente no pudo completarse.'));
+      setReviewNotice(body.review?.status === 'approved'
+        ? localeText('Independent review approved the current evidence.', 'La revisión independiente aprobó la evidencia actual.')
+        : localeText('Independent review completed. Review its findings before merging.', 'La revisión independiente terminó. Revisa sus hallazgos antes de fusionar.'));
+      onOpenRun?.(run.id);
+    } catch (error) { setReviewNotice(error.message); }
+    finally { setReviewing(false); }
   };
 
   const updateLiveFollowState = event => {
@@ -4650,12 +4684,25 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
     setSending(true);
     setFollowUpNotice(`${text.sending} ${selectedProvider}…`);
     try {
-      const response = await fetch(`/api/runs/${run.id}/${isReply ? 'reply' : 'follow-up'}`, {
+      const payload = isReply
+        ? { reply: instructionToSend }
+        : { instruction: instructionToSend, provider: selectedProvider, model: selectedModel === 'auto' ? undefined : selectedModel, executionMode: nextExecutionMode };
+      const request = cloudConsent => fetch(`/api/runs/${run.id}/${isReply ? 'reply' : 'follow-up'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isReply ? { reply: instructionToSend } : { instruction: instructionToSend, provider: selectedProvider, model: selectedModel === 'auto' ? undefined : selectedModel, executionMode: nextExecutionMode })
+        body: JSON.stringify(cloudConsent ? { ...payload, cloudConsent: true } : payload)
       });
-      const body = await response.json();
+      let response = await request(false);
+      let body = await response.json().catch(() => ({}));
+      if (!isReply && response.status === 409 && body.requiresCloudConsent) {
+        const allowed = window.confirm(localeText('The next model is cloud-based. Orbit will send your new instruction and limited project context, not your full repository, credentials, or hidden agent reasoning. Continue?', 'El siguiente modelo está en la nube. Orbit enviará tu nueva instrucción y contexto limitado del proyecto, no el repositorio completo, credenciales ni razonamiento oculto del agente. ¿Continuar?'));
+        if (!allowed) {
+          setFollowUpNotice(localeText('Model change was not started.', 'El cambio de modelo no se inició.'));
+          return;
+        }
+        response = await request(true);
+        body = await response.json().catch(() => ({}));
+      }
       if (!response.ok) {
         setFollowUpNotice(body.error || text.instructionError);
         return;
@@ -4668,7 +4715,9 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
     } finally { setSending(false); }
   };
 
-  const canMerge = run.gateStatus === 'verified_ready' && Boolean(run.branch && run.worktreePath);
+  const review = run.review || { mode: 'off', status: 'not_requested' };
+  const reviewRequired = review.mode === 'required';
+  const canMerge = run.gateStatus === 'verified_ready' && Boolean(run.branch && run.worktreePath) && (!reviewRequired || review.status === 'approved');
   const canOpenInteractiveTerminal = ['codex', 'claude'].includes(run.provider) && run.status !== 'running';
   const conversationMessages = run.messages && run.messages.length > 0
     ? run.messages
@@ -4885,6 +4934,28 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
                     </div>
                   </div>
                 )}
+
+                <section className="run-delivery-evidence" aria-label={localeText('Delivery evidence', 'Evidencia de entrega')}>
+                  <div className="run-delivery-head">
+                    <div><p className="eyebrow">{localeText('DELIVERY EVIDENCE', 'EVIDENCIA DE ENTREGA')}</p><strong>{localeText('What Orbit can prove for this run', 'Lo que Orbit puede comprobar de esta ejecución')}</strong></div>
+                    <span className={`delivery-gate ${run.gateStatus || 'needs_attention'}`}>{run.gateStatus === 'verified_ready' ? '✓ Verified' : run.gateStatus === 'needs_attention' ? 'Human review needed' : run.gateStatus || 'Pending'}</span>
+                  </div>
+                  <p>{run.gateMessage || localeText('The agent is still collecting delivery evidence.', 'El agente aún está recopilando evidencia de entrega.')}</p>
+                  <div className="delivery-checks">
+                    {['build', 'tests', 'visualQA'].map(key => <span key={key} className={`delivery-check ${run.gateChecks?.[key] || 'none'}`}>{key === 'visualQA' ? 'Visual QA' : key[0].toUpperCase() + key.slice(1)}: {run.gateChecks?.[key] || localeText('not run', 'sin ejecutar')}</span>)}
+                  </div>
+                  <div className="independent-review-panel">
+                    <div className="review-panel-heading"><div><strong>{localeText('Independent review', 'Revisión independiente')}</strong><small>{localeText('Optional second opinion. Required mode blocks merge until a current reviewer approves.', 'Segunda opinión opcional. El modo obligatorio bloquea la fusión hasta que un revisor actual apruebe.')}</small></div>{review.status !== 'not_requested' && <span className={`review-status ${review.status}`}>{review.status.replace('_', ' ')}</span>}</div>
+                    <div className="review-controls">
+                      <select value={reviewMode} onChange={event => setReviewMode(event.target.value)} aria-label="Independent review policy"><option value="off">{localeText('Off', 'Desactivada')}</option><option value="advisory">{localeText('Advisory', 'Consultiva')}</option><option value="required">{localeText('Required before merge', 'Obligatoria antes de fusionar')}</option></select>
+                      {reviewMode !== 'off' && <><select value={reviewProvider} onChange={event => { setReviewProvider(event.target.value); setReviewModel('auto'); }} aria-label="Independent reviewer provider">{reviewerProviders.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select><input list={`review-models-${run.id}`} value={reviewModel === 'auto' ? '' : reviewModel} onChange={event => setReviewModel(event.target.value || 'auto')} aria-label="Independent reviewer model" placeholder={selectedReviewer?.activeModel || 'Default model'}/><datalist id={`review-models-${run.id}`}>{(selectedReviewer?.models || []).map(model => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}</datalist><button type="button" className="text-button" disabled={reviewing || !reviewerProviders.length} onClick={startIndependentReview}>{reviewing ? localeText('Reviewing…', 'Revisando…') : localeText('Run review', 'Revisar')}</button></>}
+                    </div>
+                    {review.summary && <p className="review-summary">{review.summary}</p>}
+                    {review.findings?.length > 0 && <ul className="review-findings">{review.findings.map((finding, index) => <li key={`${finding.path || 'finding'}-${index}`} className={finding.severity}><b>{finding.severity}</b> {finding.path && <code>{finding.path}{finding.line ? `:${finding.line}` : ''}</code>} {finding.message}</li>)}</ul>}
+                    {reviewRequired && review.status !== 'approved' && <p className="review-required-note">{localeText('Merge stays locked until this reviewer approves the current worktree evidence.', 'La fusión permanece bloqueada hasta que este revisor apruebe la evidencia actual del worktree.')}</p>}
+                    {reviewNotice && <p className="review-notice" role="status">{reviewNotice}</p>}
+                  </div>
+                </section>
 
               </div>
 

@@ -1,4 +1,4 @@
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, inject, it } from 'vitest';
 import { createRunFixture, git } from './fixtures.mjs';
@@ -50,5 +50,18 @@ describe('Orbit merge safety', () => {
     const body = await response.json();
     expect(response.status).toBe(409);
     expect(body.linkedPaths).toEqual(['node_modules']);
+  });
+
+  it('blocks a required independent review until its current evidence is approved', async () => {
+    const { id } = await prepareVerifiedRun();
+    const runFile = join(dataDirectory, 'runs', `${id}.json`);
+    const run = JSON.parse(readFileSync(runFile, 'utf8'));
+    run.review = { mode: 'required', status: 'not_requested' };
+    writeFileSync(runFile, `${JSON.stringify(run, null, 2)}\n`);
+
+    const response = await fetch(`${base}/api/runs/${id}/merge`, { method: 'POST' });
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.error).toContain('required independent review');
   });
 });

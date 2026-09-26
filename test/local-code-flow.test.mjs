@@ -41,8 +41,16 @@ beforeAll(async () => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); requests.push(body);
     const coding = body.messages?.[0]?.content?.includes('code editor');
+    const reviewing = body.messages?.[0]?.content?.includes('independent, read-only code reviewer');
+    const toolFixture = body.messages?.some(message => message.content?.includes('Tool protocol fixture'));
     const corrected = body.messages?.some(message => message.content.includes('The patch was not applied:'));
-    res.end(JSON.stringify({ choices: [{ message: { content: coding ? JSON.stringify({ reason: 'Created app entry point', patch: corrected ? patch : 'invalid patch' }) : 'Review only: create an app entry point next.' } }] }));
+    const toolTurns = Math.max(0, Math.floor(((body.messages?.length || 2) - 2) / 2));
+    const toolAction = toolTurns === 0
+      ? { action: 'search_files', query: 'Fixture', path: '', limit: 5 }
+      : toolTurns === 1
+        ? { action: 'read_file', path: 'README.md', startLine: 1, endLine: 20 }
+        : { action: 'apply_patch', patch };
+    res.end(JSON.stringify({ choices: [{ message: { content: reviewing ? JSON.stringify({ verdict: 'approved', summary: 'The isolated change matches the requested entry point.', findings: [] }) : coding ? JSON.stringify(toolFixture ? toolAction : { reason: 'Created app entry point', patch: corrected ? patch : 'invalid patch' }) : 'Review only: create an app entry point next.' } }] }));
   });
   const mockPort = await listen(mock);
   const reservation = createServer(); const port = await listen(reservation); await new Promise(resolve => reservation.close(resolve));
@@ -109,4 +117,27 @@ it('uses the selected local models in both pipeline stages without switching pro
   expect(result.model).toBe('another-local-coder');
   expect(requests.slice(start).map(request => request.model)).toEqual(['future-local-coder', 'another-local-coder', 'another-local-coder']);
   expect(existsSync(join(repo, 'app.js'))).toBe(false);
+}, 20000);
+
+it('lets a direct local model inspect files through bounded tools before safely patching', async () => {
+  const response = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'code-fixture', provider: 'local', model: 'future-local-coder', executionMode: 'code', prompt: 'Tool protocol fixture: create app entry point', allowConcurrent: true }) });
+  expect(response.status).toBe(202);
+  const run = await response.json();
+  const result = await poll(async () => { const value = await (await fetch(`${base}/api/runs/${run.id}`)).json(); return ['awaiting_review', 'failed'].includes(value.status) ? value : null; });
+  expect(result.status, result.error).toBe('awaiting_review');
+  expect(result.changedFiles).toContain('app.js');
+  expect(result.agentRuntime).toMatchObject({ protocol: 'bounded-tools-v1', lastAction: 'apply_patch' });
+  expect(result.agentRuntime.turns).toBe(3);
+}, 20000);
+
+it('stores a read-only local reviewer verdict with a fingerprint of the current worktree', async () => {
+  const response = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'code-fixture', provider: 'local', model: 'future-local-coder', executionMode: 'code', prompt: 'Create app entry point for independent review', allowConcurrent: true }) });
+  const run = await response.json();
+  const completed = await poll(async () => { const value = await (await fetch(`${base}/api/runs/${run.id}`)).json(); return value.status === 'awaiting_review' ? value : null; });
+  expect(completed.changedFiles).toContain('app.js');
+  const review = await fetch(`${base}/api/runs/${run.id}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'required', provider: 'local', model: 'future-local-coder' }) });
+  const body = await review.json();
+  expect(review.ok, JSON.stringify(body)).toBe(true);
+  expect(body.review).toMatchObject({ mode: 'required', provider: 'local', status: 'approved' });
+  expect(body.review.evidenceFingerprint).toMatch(/^[a-f0-9]{64}$/);
 }, 20000);

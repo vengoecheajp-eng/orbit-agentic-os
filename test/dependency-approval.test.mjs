@@ -62,7 +62,8 @@ describe('Orbit dependency approval gate', () => {
     expect((await post(`/api/runs/${id}/dependencies/approve`, { hash: paused.dependencyRequest.hash })).status).toBe(202);
 
     const verified = await waitForRun(base, id, run => run.status === 'awaiting_review');
-    expect(verified.gateStatus, verified.gateMessage).toBe('verified_ready');
+    expect(verified.gateStatus, verified.gateMessage).toBe('needs_attention');
+    expect(verified.gateChecks.unavailable).toBe(true);
     expect(verified.dependencyApproval.installed).toBe(true);
     expect(verified.dependencyApproval.acceptedHashes).toContain(paused.dependencyRequest.hash);
     expect(readFileSync(join(worktreePath, 'node_modules', 'local-dep', 'index.js'), 'utf8')).toContain('42');
@@ -122,7 +123,8 @@ describe('Orbit dependency approval gate', () => {
 
     await post(`/api/runs/${id}/verify`);
     const verified = await waitForRun(base, id, run => run.status === 'awaiting_review');
-    expect(verified.gateStatus, verified.gateMessage).toBe('verified_ready');
+    expect(verified.gateStatus, verified.gateMessage).toBe('needs_attention');
+    expect(verified.gateChecks.unavailable).toBe(true);
     expect(verified.dependencySetup).toMatchObject([{ ok: true, ecosystem: 'npm', command: 'npm install --no-package-lock --no-audit --no-fund', directory: '.' }]);
     expect(existsSync(join(repo, 'node_modules', 'local-dep', 'index.js'))).toBe(true);
     expect(git(repo, 'status', '--porcelain')).toBe('');
