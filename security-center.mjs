@@ -190,11 +190,12 @@ export async function buildProjectSecurityCenter(project, options = {}) {
   const secretStatus = !repository.repoConnected ? 'not_available' : repository.secretFindings.length ? 'blocked' : repository.coverage?.incomplete ? 'warning' : (!repository.configuration.envIgnored && repository.configuration.localEnvFiles.length ? 'warning' : 'pass');
   const privacyStatus = !repository.repoConnected ? 'not_available' : missingTrust.some(item => item.status === 'blocked') ? 'blocked' : missingTrust.length ? 'needs_review' : validPrivacyReview ? 'pass' : 'needs_review';
   const machineStatus = runtime.platform === 'darwin' && (runtime.firewall?.status === 'disabled' || runtime.fileVault?.status === 'disabled') ? 'warning' : runtime.platform === 'darwin' && (runtime.firewall?.status === 'unknown' || runtime.fileVault?.status === 'unknown') ? 'unknown' : 'pass';
-  const exposureStatus = runtime.activeTunnels?.length ? 'warning' : 'pass';
   // A live client-portal token is a standing public exposure surface, just like a
   // preview tunnel. It is intentional and revocable, but it must never be silent —
-  // the Security Center is where a human notices it and can revoke it.
+  // it has to move the exposure status the same way an active tunnel does, or a
+  // human reviewing the Security Center has no reason to notice or revoke it.
   const clientPortalLink = project.clientShareTokenHash ? { active: true, createdAt: project.clientShareCreatedAt || null } : { active: false, createdAt: null };
+  const exposureStatus = (runtime.activeTunnels?.length || clientPortalLink.active) ? 'warning' : 'pass';
 
   const checks = [
     check({

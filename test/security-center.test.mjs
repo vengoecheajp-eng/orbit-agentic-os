@@ -144,6 +144,10 @@ describe('Security Center local evidence', () => {
     const withLink = await buildProjectSecurityCenter(project, { language: 'en', runtimePosture });
     expect(withLink.clientPortalLink).toEqual({ active: true, createdAt: '2026-09-20T00:00:00.000Z' });
     const exposureWith = withLink.checks.find(check => check.id === 'exposure');
+    // An active client portal link is a standing public exposure surface, same
+    // as an active preview tunnel: it must move the status to warning, not
+    // stay silently at pass.
+    expect(exposureWith.status).toBe('warning');
     expect(exposureWith.evidence.some(item => item.includes('Client portal link is active') && item.includes('2026-09-20T00:00:00.000Z'))).toBe(true);
     expect(exposureWith.detail).toContain('client portal link is active');
     expect(securityEvidenceMarkdown(withLink)).toContain('Client portal link: active');
