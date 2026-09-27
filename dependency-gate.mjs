@@ -29,8 +29,25 @@ export function hasDependencyChanges(diff) {
 
 // Identifies one exact set of requested changes, so an approval can never be
 // applied to a different list than the one the reviewer saw.
-export function dependencyRequestHash(manifests) {
-  const stable = manifests.map(manifest => ({ path: manifest.path, ecosystem: manifest.ecosystem, kind: manifest.kind, added: manifest.added, changed: manifest.changed, scripts: manifest.scripts, raw: manifest.raw ? manifest.raw.sha : undefined }));
+export function dependencyRequestHash(manifests, context = {}) {
+  const stable = {
+    manifests: manifests.map(manifest => ({
+      path: manifest.path,
+      ecosystem: manifest.ecosystem,
+      kind: manifest.kind,
+      directory: manifest.directory,
+      identity: manifest.identity || null,
+      added: manifest.added,
+      changed: manifest.changed,
+      scripts: manifest.scripts,
+      raw: manifest.raw ? manifest.raw.sha : undefined
+    })),
+    // Effective package sources can be declared in an unchanged sibling file
+    // (for example .npmrc or pyproject.toml). Bind those exact bytes to the
+    // approval as well, otherwise a reviewed public install could be redirected
+    // to a different registry before the package manager starts.
+    sourceInputs: Array.isArray(context.sourceInputs) ? context.sourceInputs : []
+  };
   return createHash('sha256').update(JSON.stringify(stable)).digest('hex');
 }
 

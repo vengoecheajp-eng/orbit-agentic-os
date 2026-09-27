@@ -21,6 +21,12 @@ export function mergeEligibility(run) {
   if (run.status !== 'awaiting_review') return { ok: false, status: 409, error: 'Run is not awaiting executive review.' };
   if (normalizedGateStatus(run) !== 'verified_ready') return { ok: false, status: 409, error: 'Completion Gate has not verified this run. Inspect or repair it before merging.' };
   if (!hasCodeArtifact(run)) return { ok: false, status: 422, error: 'This run has no isolated code branch to merge.' };
+  const evidence = run.verification;
+  const gitObject = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+  const validHash = (value, pattern) => typeof value === 'string' && pattern.test(value);
+  if (evidence?.version !== 1 || evidence.algorithm !== 'sha256' || !validHash(evidence.fingerprint, /^[a-f0-9]{64}$/) || !validHash(evidence.finalTreeHash, gitObject) || !validHash(evidence.policyHash, /^[a-f0-9]{64}$/) || !validHash(evidence.baseCommit, gitObject) || !validHash(evidence.headCommit, gitObject)) {
+    return { ok: false, status: 409, error: 'This run has no supported verification evidence. Re-verify the worktree before merging.' };
+  }
   return { ok: true, status: 200, error: '' };
 }
 

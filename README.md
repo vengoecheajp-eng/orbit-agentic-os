@@ -238,13 +238,14 @@ For the complete production-dependency and release-boundary check, run:
 npm run security:check
 ```
 
-### v0.3.0-alpha release scope
+### v0.4.0-alpha release scope
 
-This alpha adds **Project Intelligence**: a reusable workflow library,
-structured local Project Brain sections, a read-only compatibility scanner, and
-the Model Lab for evidence-led comparisons. It does not change Orbit's safety
-boundary: skills remain explicitly approved, code changes remain in isolated
-worktrees, and no repository configuration is adopted automatically.
+This alpha strengthens Orbit's verified delivery lifecycle: exact completion
+fingerprints, durable execution ownership, restart-safe merge intent,
+dependency and skill boundaries, and clearer recovery evidence. Project
+Intelligence, Project Brain, the compatibility scanner, and Model Lab remain
+available. Skills stay explicitly approved, code changes stay isolated, and
+Orbit does not overwrite a live checkout to force a merge.
 
 ## Verification
 

@@ -10,6 +10,31 @@ versions repair behavior without expanding scope.
   inspect-first and opt-in; Orbit does not bundle it, install its runtime,
   configure credentials, or authorize external services automatically.
 
+## v0.4.0-alpha — 2026-09-27
+
+### Added
+
+- Verified delivery fingerprints that bind completion evidence to the exact
+  repository, commit, policy, dependency inputs, and resulting tree.
+- Durable execution ownership and restart recovery for interrupted runs and
+  merge operations.
+- Safer dependency approvals, skill-runtime boundaries, visual QA evidence,
+  and explicit recovery guidance in the interface.
+
+### Hardened
+
+- Approval and merge now use isolated Git trees, compare-and-swap reference
+  updates, bounded evidence, and fail-closed recovery instead of overwriting a
+  live checkout.
+- Release checks reject private runtime state, secrets, unsafe links, and local
+  artifacts before publication.
+
+### Boundary
+
+- Orbit remains a local-first, single-user alpha. It never makes a merge,
+  dependency installation, external exposure, or skill activation safe without
+  the corresponding explicit approval and verified evidence.
+
 ## v0.3.0-alpha — 2026-09-26
 
 ### Added

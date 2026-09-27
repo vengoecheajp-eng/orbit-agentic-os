@@ -26,7 +26,11 @@ export default defineConfig(({ mode }) => {
     },
     test: {
       globalSetup: './test/global-setup.mjs',
-      testTimeout: 10_000
+      testTimeout: 10_000,
+      // Browser workflow suites share the same isolated Orbit/Vite fixture.
+      // Capping workers keeps navigation deterministic on smaller Macs and CI
+      // runners instead of letting dozens of Playwright pages starve the server.
+      maxWorkers: 4
     }
   };
 });

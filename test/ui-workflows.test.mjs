@@ -21,7 +21,7 @@ function makeRun(id = 'review-run', overrides = {}) {
 
 // Every API request is intercepted: these scenarios never launch agents, write
 // to a contributor's profile, download models, or contact the real control plane.
-async function withWorkspace(check, { runs = [makeRun()], handlers = {}, viewport = { width: 1280, height: 900 } } = {}) {
+async function withWorkspace(check, { runs = [makeRun()], handlers = {}, providerList = providers, viewport = { width: 1280, height: 900 } } = {}) {
   const browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport });
   // Exercise fallback fonts too: local Orbit must remain usable offline, and
@@ -37,7 +37,7 @@ async function withWorkspace(check, { runs = [makeRun()], handlers = {}, viewpor
     localStorage.setItem('orbit-concierge-dismissed', 'true');
   });
   const fixtures = {
-    '/api/health': { ok: true, providers },
+    '/api/health': { ok: true, providers: providerList },
     '/api/projects': [project],
     '/api/runs': runs,
     '/api/profile': { name: 'Workflow Tester', role: 'Tester', workspace: 'Browser fixtures', initials: 'WT' },
@@ -310,6 +310,58 @@ describe('Orbit keyboard and agent workflow regressions', () => {
       await monitor.waitFor();
       expect(await monitor.locator('textarea').inputValue()).toBe('Use blue, please');
     }, { runs: [run], handlers: { '/api/runs/paused-run/reply': route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Mock reply unavailable' }) }) } });
+  }, 30000);
+
+  browserTest('independent review never submits a disconnected hidden reviewer or silently chooses cloud', async () => {
+    const run = makeRun('cloud-review-run', { status: 'awaiting_review', gateStatus: 'verified_ready', prompt: 'Cloud review fixture', branch: 'orbit/cloud-review-run', worktreePath: '/test-only/worktree', review: { mode: 'advisory', provider: 'local', status: 'not_requested' } });
+    const providerList = [
+      { id: 'codex', label: 'Codex', available: true, mode: 'write', activeModel: 'codex-test', models: [] },
+      { id: 'local', label: 'Local · Ollama', available: false, installed: true, ready: false, activeModel: 'local-test', models: [] },
+      { id: 'gemini', label: 'Gemini', available: true, mode: 'plan', activeModel: 'gemini-fixture', models: [{ id: 'gemini-fixture', label: 'Gemini fixture' }] },
+    ];
+    let calls = 0;
+    await withWorkspace(async ({ page, writes }) => {
+      await openSearch(page, 'Cloud review fixture');
+      await page.locator('.command-results [role="option"]').click();
+      const monitor = page.locator('.run-monitor');
+      await monitor.waitFor();
+      const reviewer = monitor.getByRole('combobox', { name: 'Independent reviewer provider' });
+      await expect.poll(() => reviewer.inputValue()).toBe('');
+      expect(await reviewer.locator('option').allTextContents()).toEqual(['Select reviewer…', 'Gemini']);
+      const action = monitor.getByRole('button', { name: 'Run review', exact: true });
+      expect(await action.isDisabled()).toBe(true);
+      expect(writes).toEqual([]);
+
+      await reviewer.selectOption('gemini');
+      expect(await reviewer.inputValue()).toBe('gemini');
+      expect(await action.isEnabled()).toBe(true);
+      page.on('dialog', dialog => dialog.accept());
+      await action.click();
+      await expect.poll(() => writes.filter(item => item.path === `/api/runs/${run.id}/review`).length).toBe(2);
+      const submitted = writes.filter(item => item.path === `/api/runs/${run.id}/review`);
+      expect(submitted.every(item => item.body.provider === 'gemini')).toBe(true);
+      expect(submitted.map(item => item.body.cloudConsent)).toEqual([false, true]);
+    }, { runs: [run], providerList, handlers: { [`/api/runs/${run.id}/review`]: route => {
+      calls += 1;
+      return route.fulfill({ status: calls === 1 ? 409 : 200, contentType: 'application/json', body: JSON.stringify(calls === 1 ? { error: 'Confirm cloud review.', requiresCloudConsent: true } : { ok: true, review: { status: 'approved' } }) });
+    } } });
+  }, 30000);
+
+  browserTest('independent review explains and refuses submission when no reviewer is connected', async () => {
+    const run = makeRun('no-reviewer-run', { status: 'awaiting_review', gateStatus: 'verified_ready', prompt: 'No reviewer fixture', branch: 'orbit/no-reviewer-run', worktreePath: '/test-only/worktree', review: { mode: 'required', provider: 'local', status: 'not_requested' } });
+    const providerList = [{ id: 'codex', label: 'Codex', available: true, mode: 'write', activeModel: 'codex-test', models: [] }];
+    await withWorkspace(async ({ page, writes }) => {
+      await openSearch(page, 'No reviewer fixture');
+      await page.locator('.command-results [role="option"]').click();
+      const monitor = page.locator('.run-monitor');
+      const reviewer = monitor.getByRole('combobox', { name: 'Independent reviewer provider' });
+      await reviewer.waitFor();
+      expect(await reviewer.isDisabled()).toBe(true);
+      expect(await reviewer.inputValue()).toBe('');
+      expect(await monitor.getByRole('button', { name: 'Run review', exact: true }).isDisabled()).toBe(true);
+      await monitor.getByText('No read-only reviewer is connected. Connect Ollama or explicitly configure a supported cloud reviewer in Settings.', { exact: true }).waitFor();
+      expect(writes).toEqual([]);
+    }, { runs: [run], providerList });
   }, 30000);
 
   browserTest('closing a pending run prevents its late fetch from reopening the monitor', async () => {

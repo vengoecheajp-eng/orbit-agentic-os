@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, inject, it } from 'vitest';
@@ -61,11 +61,16 @@ describe('Orbit dependency approval gate', () => {
     expect((await post(`/api/runs/${id}/dependencies/approve`, { hash: 'stale' })).status).toBe(409);
     expect((await post(`/api/runs/${id}/dependencies/approve`, { hash: paused.dependencyRequest.hash })).status).toBe(202);
 
-    const verified = await waitForRun(base, id, run => run.status === 'awaiting_review');
-    expect(verified.gateStatus, verified.gateMessage).toBe('needs_attention');
-    expect(verified.gateChecks.unavailable).toBe(true);
-    expect(verified.dependencyApproval.installed).toBe(true);
-    expect(verified.dependencyApproval.acceptedHashes).toContain(paused.dependencyRequest.hash);
+    const reviewed = await waitForRun(base, id, run => run.status === 'awaiting_review');
+    // Installing an approved package does not manufacture verification when
+    // the project has no executable build, test, or visual check.
+    expect(reviewed.gateStatus, reviewed.gateMessage).toBe('needs_attention');
+    expect(reviewed.verification).toBeUndefined();
+    expect(reviewed.dependencyApproval.installed).toBe(true);
+    expect(reviewed.dependencyApproval.acceptedHashes).toContain(paused.dependencyRequest.hash);
+    // npm may create/update only its lockfile after the reviewed install. Orbit
+    // records that derived fingerprint without blessing any manifest/config edit.
+    expect(new Set(reviewed.dependencyApproval.acceptedHashes).size).toBeGreaterThanOrEqual(2);
     expect(readFileSync(join(worktreePath, 'node_modules', 'local-dep', 'index.js'), 'utf8')).toContain('42');
     expect(existsSync(join(worktreePath, 'package-lock.json'))).toBe(true);
   }, INSTALL_TEST_TIMEOUT);
@@ -79,7 +84,8 @@ describe('Orbit dependency approval gate', () => {
     expect((await post(`/api/runs/${id}/dependencies/approve`, { hash: paused.dependencyRequest.hash })).status).toBe(202);
 
     const failed = await waitForRun(base, id, run => run.status === 'awaiting_dependency_approval' && Boolean(run.dependencyRequest?.installError));
-    expect(failed.dependencyRequest.installError.command).toBe('npm install --no-audit --no-fund');
+    expect(failed.dependencyRequest.installError.command).toContain('npm install');
+    expect(failed.dependencyRequest.installError.command).toContain('--ignore-scripts');
     expect(failed.dependencyRequest.installError.summary.length).toBeGreaterThan(0);
     expect(failed.dependencyApproval).toBeUndefined();
     expect(existsSync(join(worktreePath, 'node_modules'))).toBe(false);
@@ -92,6 +98,26 @@ describe('Orbit dependency approval gate', () => {
     await post(`/api/runs/${id}/verify`);
     const paused = await waitForRun(base, id, run => run.status === 'awaiting_dependency_approval');
     expect(paused.dependencyRequest.manifests[0].scripts).toEqual([{ name: 'postinstall', from: null, to: 'node setup.js' }]);
+  }, INSTALL_TEST_TIMEOUT);
+
+  it('treats deleting a lockfile as an approval-gated dependency change', async () => {
+    const { id } = await createRunFixture({
+      base,
+      testRoot,
+      dataDirectory,
+      files: {
+        'package.json': { name: 'locked-fixture', version: '1.0.0' },
+        'package-lock.json': { name: 'locked-fixture', version: '1.0.0', lockfileVersion: 3, packages: {} }
+      },
+      run: { gateStatus: 'needs_attention' },
+      setupWorktree: worktreePath => rmSync(join(worktreePath, 'package-lock.json'))
+    });
+
+    await post(`/api/runs/${id}/verify`);
+    const paused = await waitForRun(base, id, run => run.status === 'awaiting_dependency_approval');
+    expect(paused.dependencyRequest.manifests).toEqual([
+      expect.objectContaining({ path: 'package-lock.json', kind: 'deleted', raw: expect.objectContaining({ isDeleted: true }) })
+    ]);
   }, INSTALL_TEST_TIMEOUT);
 
   it('records a rejection and keeps the run out of the merge path', async () => {
@@ -116,19 +142,47 @@ describe('Orbit dependency approval gate', () => {
       base,
       testRoot,
       dataDirectory,
-      files: { 'package.json': { name: 'fixture', version: '1.0.0', dependencies: { 'local-dep': `file:${dependency}` } } },
+      files: { 'package.json': { name: 'fixture', version: '1.0.0', dependencies: { 'local-dep': `file:${dependency}` }, scripts: { build: 'node -e "process.exit(0)"' } } },
       run: { gateStatus: 'needs_attention' },
       setupWorktree: worktreePath => writeFileSync(join(worktreePath, 'feature.txt'), 'agent change\n')
     });
 
     await post(`/api/runs/${id}/verify`);
+    const paused = await waitForRun(base, id, run => run.status === 'awaiting_dependency_approval');
+    expect(paused.dependencyRequest.manifests).toEqual([]);
+    expect(paused.dependencyRequest.setupPlans[0]).toMatchObject({ ecosystem: 'npm', directory: '.', scriptsDisabled: true });
+    expect(paused.dependencyRequest.setupPlans[0].command).toContain('--ignore-scripts');
+    expect(existsSync(join(repo, 'node_modules'))).toBe(false);
+    expect((await post(`/api/runs/${id}/dependencies/approve`, { hash: paused.dependencyRequest.hash })).status).toBe(202);
     const verified = await waitForRun(base, id, run => run.status === 'awaiting_review');
-    expect(verified.gateStatus, verified.gateMessage).toBe('needs_attention');
-    expect(verified.gateChecks.unavailable).toBe(true);
-    expect(verified.dependencySetup).toMatchObject([{ ok: true, ecosystem: 'npm', command: 'npm install --no-package-lock --no-audit --no-fund', directory: '.' }]);
+    expect(verified.gateStatus, verified.gateMessage).toBe('verified_ready');
+    expect(verified.dependencySetup).toMatchObject([{ ok: true, ecosystem: 'npm', directory: '.' }]);
+    expect(verified.dependencySetup[0].command).toContain('--ignore-scripts');
     expect(existsSync(join(repo, 'node_modules', 'local-dep', 'index.js'))).toBe(true);
     expect(git(repo, 'status', '--porcelain')).toBe('');
     // The gate's link to those packages is removed once the checks finish.
     expect(() => lstatSync(join(worktreePath, 'node_modules'))).toThrow();
+  }, INSTALL_TEST_TIMEOUT);
+
+  it('invalidates project setup approval when a manifest changes after review', async () => {
+    const dependency = localPackage();
+    const { projectId, repo } = await createRunFixture({
+      base,
+      testRoot,
+      dataDirectory,
+      files: { 'package.json': { name: 'approval-snapshot', version: '1.0.0', dependencies: { 'local-dep': `file:${dependency}` } } },
+      setupWorktree: worktreePath => writeFileSync(join(worktreePath, 'feature.txt'), 'unchanged\n')
+    });
+    const initial = await post(`/api/projects/${projectId}/dependencies/prepare`, { consent: true, hash: 'stale' });
+    expect(initial.status).toBe(409);
+    expect(initial.body.setupHash).toMatch(/^[a-f0-9]{64}$/);
+    const manifest = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));
+    manifest.devDependencies = { another: `file:${dependency}` };
+    writeFileSync(join(repo, 'package.json'), JSON.stringify(manifest, null, 2));
+
+    const stale = await post(`/api/projects/${projectId}/dependencies/prepare`, { consent: true, hash: initial.body.setupHash });
+    expect(stale.status).toBe(409);
+    expect(stale.body.setupHash).not.toBe(initial.body.setupHash);
+    expect(existsSync(join(repo, 'node_modules'))).toBe(false);
   }, INSTALL_TEST_TIMEOUT);
 });

@@ -38,14 +38,54 @@ paths, terminal history, client portal tokens, QR codes, or model credentials.
 
 ## 4. Create the GitHub repository
 
-Before the first push, inspect the candidate set:
+Before the first push, select and stage only the intended public files, then
+inspect the exact index contents:
 
 ```bash
 git status --short
 npm run release:check
 ```
 
-Add only the files intended for Community. Do not force-add ignored files. The
+The default check is `--index`: it reads staged Git blobs, including files that
+have unstaged edits or are missing from the working directory. It does **not**
+inspect unstaged or untracked files. Stage each intended change and rerun the
+check; a sanitized working copy cannot fix sensitive content still in the index.
+Intent-to-add entries and unresolved merge conflicts must be resolved first.
+
+After creating the intended release commit, check that exact commit or tree:
+
+```bash
+npm run release:check -- --tree <release-commit-sha>
+```
+
+The checker resolves the revision once and reports the inspected tree ID. A
+failure to resolve, list, or completely read a candidate fails the check. Binary
+blobs are scanned for the same secret byte patterns as text. Symlink target
+strings are scanned without following links; submodules are rejected because
+their contents are outside the inspected tree. A single Git output or blob over
+64 MiB also fails inspection and requires deliberate review/tooling before release.
+Local Git replacement refs cannot substitute different content, and missing
+objects are not fetched automatically from a remote.
+
+The targeted privacy scan rejects common provider credentials (including AWS,
+GitHub, Google, Slack, Twilio, and supported model providers), private-key
+headers, credential-bearing URLs, likely literal secret assignments, personal
+home-directory paths, and explicitly labelled customer identifiers. Synthetic
+placeholders and common CI/service-user homes are exempted to reduce false
+positives; every exemption still requires human review before publishing.
+
+Private `.env` files are forbidden at every depth, including `app/.env` and
+`app/.env.production`; `.env.example` is the deliberate safe exception, and its
+contents are still scanned. Runtime-data restrictions and required public
+documents apply to the selected index/tree. This check does not inspect every
+commit in Git history; scan history separately before making that claim. It is a
+targeted pattern check, not a guarantee, privacy certification, or substitute
+for manual review. It does not unpack archives, decrypt content, infer encoded
+or split credentials, inspect generated build output that is absent from the
+selected Git candidate, or prove that all personal/customer information has
+been removed.
+
+Do not force-add ignored files. The
 initial repository must include `LICENSE`, `README.md`, `SECURITY.md`,
 `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.env.example`, CI, and the safe
 example project.
@@ -65,8 +105,8 @@ example project.
   same semantic version before tagging.
 - Add a dated entry to `CHANGELOG.md` describing user-visible behavior,
   boundaries, and verification—not internal implementation detail alone.
-- For `v0.3.0-alpha`, mention Project Intelligence: reusable workflows,
-  structured local Project Brain, read-only runtime compatibility scanning, and
-  evidence-led Model Lab comparisons.
+- For `v0.4.0-alpha`, mention the verified delivery lifecycle, exact evidence
+  fingerprints, durable execution ownership, restart-safe merge intent, and
+  stronger dependency and skill boundaries.
 - State clearly that this remains an alpha, a local-first single-user control
   plane, and that no model comparison chooses or merges a winner automatically.

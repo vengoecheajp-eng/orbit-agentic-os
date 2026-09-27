@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowUpRight, Bell, Bot, Check, ChevronRight, CirclePlus, Command,
@@ -44,6 +44,13 @@ const dictionaries = {
   }
 };
 const uiCopy = dictionaries.en;
+const LocaleContext = createContext('en');
+
+function useLocaleText() {
+  const language = useContext(LocaleContext);
+  return (english, spanish) => language === 'es' ? spanish : english;
+}
+
 Object.assign(dictionaries.en, {
   localWorkspace: 'Local workspace', themeLight: '☀ Light', themeDark: '◐ Dark', inbox: 'Inbox',
   searchProjects: 'Search projects and runs…', searchProjectsAria: 'Search projects and runs', searchNoMatches: 'No matching projects or runs.',
@@ -218,6 +225,7 @@ function App() {
   const [monitorError, setMonitorError] = useState('');
   const currentMonitorId = useRef(null);
   const refreshRequest = useRef(0);
+  const taskSaves = useRef(new Set());
   const newProjectRef = useDialogFocus(() => setShowNew(false), showNew);
   const closeGenesis = () => { setShowGenesis(false); localStorage.setItem('orbit-concierge-dismissed', 'true'); };
   const copy = dictionaries[language] || uiCopy;
@@ -358,22 +366,31 @@ function App() {
   const toggleTask = async (projectId, taskIndex) => {
     const project = projects.find(item => item.id === projectId);
     if (!project) return;
+    if (taskSaves.current.has(projectId)) throw new Error(localeText('Another task is being saved. Try again when it finishes.', 'Se está guardando otra tarea. Reintenta cuando termine.'));
     const tasks = (project.tasks || []).map((task, index) => {
       if (index !== taskIndex) return task;
       if (Array.isArray(task)) return [task[0], task[1], !task[2], ...task.slice(3)];
       return { ...task, completed: !task.completed };
     });
-    const completed = tasks.filter(t => t[2]).length;
+    const completed = tasks.filter(projectTaskDone).length;
     const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
 
-    setProjects(current => current.map(item => item.id === projectId ? { ...item, tasks, progress } : item));
+    taskSaves.current.add(projectId);
     try {
-      await fetch(`/api/projects/${projectId}/tasks`, {
+      const response = await fetch(`/api/projects/${projectId}/tasks`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tasks, progress })
       });
-    } catch (error) { setNotice(error.message || localeText('Could not suggest tasks.', 'No se pudieron sugerir tareas.')); }
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || localeText('Could not save this task. Please retry.', 'No se pudo guardar esta tarea. Reintenta.'));
+      refreshRequest.current++;
+      setProjects(current => current.map(item => item.id === projectId ? { ...item, tasks, progress } : item));
+    } catch (error) {
+      throw new Error(localeText('Task was not saved. ', 'No se guardó la tarea. ') + (error.message || localeText('Please retry.', 'Reintenta.')));
+    } finally {
+      taskSaves.current.delete(projectId);
+    }
   };
 
   const [agentPrefill, setAgentPrefill] = useState(null);
@@ -420,7 +437,7 @@ function App() {
   const pageLinks = [ ['overview', copy.overview], ['projects', copy.projects], ['agents', copy.agents], ['foundry', copy.foundry], ['skills', copy.skillHub], ['settings', copy.settings] ];
   const attentionRuns = runs.filter(run => ['awaiting_input', 'awaiting_review', 'failed', 'needs_model', 'repairing'].includes(run.status));
 
-  return <div className="app-shell">
+  return <LocaleContext.Provider value={language}><div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark" style={{ overflow: 'hidden', padding: 0 }}><img src="/orbit-logo.png" alt="Orbit logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /></div><span>orbit</span></div>
       <button className="workspace-switcher" onClick={() => setActive('settings')}><div className="workspace-orb">{profile?.initials || 'O'}</div><div><small>{copy.workspace}</small><strong>{profile?.workspace || copy.localWorkspace}</strong></div><ChevronRight size={15}/></button>
@@ -437,7 +454,7 @@ function App() {
     <main>
       <header><div><p className="eyebrow">{today}</p><h1>{active === 'overview' ? `${copy.greeting}, ${profile?.name?.trim().split(/\s+/)[0]?.replace(/[’']s$/i, '') || copy.profileFallback}.` : pageLinks.find(([id]) => id === active)?.[1]}</h1></div>
         <div className="header-actions">
-          <button className="language-switcher" type="button" aria-label={copy.changeLanguage} onClick={() => setLanguage(current => current === 'en' ? 'es' : 'en')}>{language === 'en' ? 'ES' : 'EN'}</button>
+          <button className="language-switcher" type="button" aria-label={copy.changeLanguage} onClick={() => setLanguage(current => { const next = current === 'en' ? 'es' : 'en'; document.documentElement.lang = next; return next; })}>{language === 'en' ? 'ES' : 'EN'}</button>
           <button className="theme-switcher" aria-label={copy.toggleDarkMode} onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? copy.themeLight : copy.themeDark}</button>
           <button className={`inbox-trigger ${(inbox.readyCount || 0) + (inbox.needsAttentionCount || 0) > 0 ? 'has-items' : ''}`} type="button" onClick={() => setShowInbox(true)}><Inbox size={16}/><span>{copy.inbox}</span>{inbox.count > 0 && <b>{inbox.count}</b>}</button>
           <button className="icon-button" onClick={() => setShowSearch(true)} aria-label={copy.searchProjectsAria} title="Search · ⌘/Ctrl K"><Search size={19}/></button>
@@ -483,7 +500,7 @@ function App() {
       onRunTask={handleRunTask}
       onInspect={item => { setShowInbox(false); setSelected(null); setActive('agents'); setInspectRunId(item.id); }}
     />}
-    {brainProject && <ProjectBrainModal project={brainProject} copy={copy} onClose={() => setBrainProject(null)}/>}
+    {brainProject && <ProjectBrainModal key={brainProject.id} project={brainProject} copy={copy} onClose={() => setBrainProject(null)}/>}
     {showGenesis && <GenesisOnboardingModal language={language} onClose={() => { closeGenesis(); loadControlPlane(); }} refresh={loadControlPlane}/>}
     {showCredits && <CreditsUsageModal language={language} onClose={() => setShowCredits(false)} onOpenSettings={() => { setShowCredits(false); setActive('settings'); }} />}
     <GlobalAgentDock runs={runs} onOpen={openRunMonitor} onShowAll={() => setShowAllAgents(true)}/>
@@ -496,7 +513,7 @@ function App() {
     {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} pages={pageLinks}/>}
     {showSearch && <GlobalSearch projects={projects} runs={runs} copy={copy} query={searchQuery} setQuery={setSearchQuery} onClose={() => setShowSearch(false)} onProject={project => { setSelected(project); setShowSearch(false); }} onRun={run => { setShowSearch(false); openRunMonitor(run); }} actions={[...pageLinks.map(([id, label]) => ({ id, label, execute: () => setActive(id) })), { id: 'new', label: copy.newProject, execute: () => setShowNew(true) }, { id: 'inbox', label: copy.inbox, execute: () => setShowInbox(true) }]}/>}
     {loaded && !profile && <Onboarding providers={providers} copy={copy} onComplete={profile => { setProfile(profile); setActive('agents'); }}/>}
-  </div>;
+  </div></LocaleContext.Provider>;
 }
 
 function workLabel(run) {
@@ -578,7 +595,40 @@ function GlobalAgentDock({ runs, onOpen, onShowAll }) {
   </aside>;
 }
 
-function Onboarding({ providers, copy, onComplete }) { const [name,setName]=useState(''),[saving,setSaving]=useState(false),[error,setError]=useState(''); const available=providers.filter(provider=>provider.available).length; const save=async event=>{event.preventDefault();setSaving(true);const r=await fetch('/api/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,role:'Administrator',workspace:'My workspace'})});const d=await r.json();setSaving(false);if(r.ok)onComplete(d);else setError(d.error||copy.onboardingError)}; return <div className="modal-backdrop onboarding"><section className="modal"><p className="eyebrow">{copy.onboardingEyebrow}</p><h2>{copy.onboardingTitle}</h2><p className="empty-copy">{copy.onboardingDetail.replace('{count}', available)}</p><form className="api-key-form" onSubmit={save}><label>{copy.onboardingName}<input autoFocus value={name} onChange={event=>setName(event.target.value)} placeholder={copy.onboardingNamePlaceholder} required/></label><button className="new-button" disabled={saving}>{saving?copy.onboardingSaving:copy.onboardingStart}</button></form>{error&&<p className="run-notice">{error}</p>}</section></div> }
+function Onboarding({ providers, copy, onComplete }) {
+  const dialogRef = useDialogFocus(undefined);
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const available = providers.filter(provider => provider.available).length;
+  const save = async event => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetch('/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, role: 'Administrator', workspace: 'My workspace' }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || copy.onboardingError);
+      onComplete(body);
+    } catch (requestError) {
+      setError(requestError.message || copy.onboardingError);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <div className="modal-backdrop onboarding mandatory-onboarding">
+    <section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="orbit-onboarding-title" aria-describedby="orbit-onboarding-description">
+      <p className="eyebrow">{copy.onboardingEyebrow}</p>
+      <h2 id="orbit-onboarding-title">{copy.onboardingTitle}</h2>
+      <p id="orbit-onboarding-description" className="empty-copy">{copy.onboardingDetail.replace('{count}', available)}</p>
+      <form className="api-key-form" onSubmit={save} aria-busy={saving}>
+        <label>{copy.onboardingName}<input data-autofocus autoFocus value={name} onChange={event => setName(event.target.value)} placeholder={copy.onboardingNamePlaceholder} aria-describedby={error ? 'orbit-onboarding-error' : undefined} required/></label>
+        <button className="new-button" disabled={saving}>{saving ? copy.onboardingSaving : copy.onboardingStart}</button>
+      </form>
+      {error && <p id="orbit-onboarding-error" className="run-notice" role="alert">{error}</p>}
+    </section>
+  </div>;
+}
 
 function GlobalSearch({ projects, runs, copy, query, setQuery, onClose, onProject, onRun, actions = [] }) {
   const dialogRef = useDialogFocus(onClose);
@@ -626,11 +676,12 @@ const providerName = provider => ({ codex: 'Codex', claude: 'Claude', ollama: 'O
 
 function EvidenceLightboxModal({ url, title, onClose }) {
   const dialogRef = useDialogFocus(onClose);
+  const t = useLocaleText();
   return <div className="modal-backdrop lightbox-backdrop" onClick={onClose}>
-    <div ref={dialogRef} className="lightbox-content" aria-label={title} onClick={e => e.stopPropagation()}>
+    <div ref={dialogRef} className="lightbox-content" role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}>
       <div className="lightbox-header">
         <span>{title}</span>
-        <button className="close" onClick={onClose} aria-label="Close image"><X size={18}/></button>
+        <button className="close" onClick={onClose} aria-label={t('Close image', 'Cerrar imagen')}><X size={18}/></button>
       </div>
       <div className="lightbox-body">
         <img src={url} alt={title} className="lightbox-image" />
@@ -641,6 +692,7 @@ function EvidenceLightboxModal({ url, title, onClose }) {
 
 function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, onRunTask }) {
   const dialogRef = useDialogFocus(onClose);
+  const t = useLocaleText();
   const [busy, setBusy] = useState({});
   const [nextOffer, setNextOffer] = useState(null);
   const [qaBusy, setQaBusy] = useState({});
@@ -649,11 +701,11 @@ function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, 
   const [lightboxImage, setLightboxImage] = useState(null);
   const items = inbox?.items || [];
   const gateDetails = item => {
-    if (item.gateStatus === 'verified_ready') return { label: 'Verified Ready', icon: '🟢', className: 'verified-ready' };
-    if (item.gateStatus === 'repairing') return { label: `Auto-Repairing (${item.autoRepairAttempts || 0}/2)`, icon: '🔵', className: 'repairing' };
-    if (item.gateStatus === 'verifying') return { label: localeText('Verifying…', 'Verificando…'), icon: '⏳', className: 'repairing' };
-    if (item.gateStatus === 'dependency_approval') return { label: localeText('Dependency approval', 'Aprobar dependencias'), icon: '📦', className: 'dependency-approval' };
-    return { label: 'Needs Attention', icon: '🟡', className: 'needs-attention' };
+    if (item.gateStatus === 'verified_ready') return { label: t('Verified Ready', 'Verificado y listo'), icon: '🟢', className: 'verified-ready' };
+    if (item.gateStatus === 'repairing') return { label: t(`Auto-Repairing (${item.autoRepairAttempts || 0}/2)`, `Auto-reparando (${item.autoRepairAttempts || 0}/2)`), icon: '🔵', className: 'repairing' };
+    if (item.gateStatus === 'verifying') return { label: t('Verifying…', 'Verificando…'), icon: '⏳', className: 'repairing' };
+    if (item.gateStatus === 'dependency_approval') return { label: t('Dependency approval', 'Aprobar dependencias'), icon: '📦', className: 'dependency-approval' };
+    return { label: t('Needs Attention', 'Necesita atención'), icon: '🟡', className: 'needs-attention' };
   };
   const triggerVisualQA = async (item) => {
     setQaBusy(current => ({ ...current, [item.id]: true }));
@@ -706,8 +758,8 @@ function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, 
 
   return <div className="modal-backdrop executive-inbox-backdrop">
     {lightboxImage && <EvidenceLightboxModal url={lightboxImage.url} title={lightboxImage.title} onClose={() => setLightboxImage(null)} />}
-    <section ref={dialogRef} className="modal executive-inbox" role="dialog" aria-modal="true" aria-label="Executive Review Inbox">
-      <button className="close" onClick={onClose} aria-label="Close inbox"><X size={18}/></button>
+    <section ref={dialogRef} className="modal executive-inbox" role="dialog" aria-modal="true" aria-label={copy.inboxTitle}>
+      <button className="close" onClick={onClose} aria-label={t('Close inbox', 'Cerrar bandeja')}><X size={18}/></button>
       <div className="inbox-heading">
         <div className="inbox-heading-icon"><Inbox size={20}/></div>
         <div><p className="eyebrow">{copy.inboxTitle}</p><h2>{copy.inboxTitle}</h2><p>{copy.inboxDescription}</p></div>
@@ -760,8 +812,8 @@ function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, 
             </div>}
             {!item.dependencyRequest && <GateCheckList checks={item.gateChecks?.checks}/>}
             <div className="inbox-files">
-              <strong>{changedFiles.length} changed {changedFiles.length === 1 ? 'file' : 'files'}</strong>
-              <div>{changedFiles.slice(0, 6).map(file => <span key={file}>{file}</span>)}{changedFiles.length > 6 && <span>+{changedFiles.length - 6} more</span>}</div>
+              <strong>{changedFiles.length} {changedFiles.length === 1 ? t('changed file', 'archivo modificado') : t('changed files', 'archivos modificados')}</strong>
+              <div>{changedFiles.slice(0, 6).map(file => <span key={file}>{file}</span>)}{changedFiles.length > 6 && <span>+{changedFiles.length - 6} {t('more', 'más')}</span>}</div>
             </div>
 
             {(item.visualQA || hasScreenshots) && (
@@ -774,6 +826,8 @@ function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, 
                     <button
                       type="button"
                       className="evidence-toggle-btn"
+                      aria-expanded={Boolean(expandedEvidence[item.id])}
+                      aria-controls={`visual-evidence-${item.id}`}
                       onClick={() => setExpandedEvidence(curr => ({ ...curr, [item.id]: !curr[item.id] }))}
                     >
                       <Camera size={13} /> {expandedEvidence[item.id] ? 'Hide Screenshots' : 'View Screenshots'}
@@ -782,18 +836,18 @@ function ExecutiveInbox({ inbox, projects, copy, onClose, onRefresh, onInspect, 
                 </div>
 
                 {expandedEvidence[item.id] && hasScreenshots && (
-                  <div className="evidence-preview-grid">
+                  <div className="evidence-preview-grid" id={`visual-evidence-${item.id}`}>
                     {item.desktopScreenshot && (
-                      <div className="evidence-slot" onClick={() => setLightboxImage({ url: item.desktopScreenshot, title: `${item.projectName || 'Run'} · Desktop (1280×800)` })}>
-                        <div className="evidence-slot-label"><Monitor size={12}/> Desktop (1280×800)</div>
+                      <button type="button" className="evidence-slot" aria-label={t(`Open desktop screenshot for ${item.projectName || 'this run'}`, `Abrir captura de escritorio de ${item.projectName || 'esta ejecución'}`)} onClick={() => setLightboxImage({ url: item.desktopScreenshot, title: `${item.projectName || 'Run'} · Desktop (1280×800)` })}>
+                        <span className="evidence-slot-label"><Monitor size={12}/> Desktop (1280×800)</span>
                         <img src={item.desktopScreenshot} alt="Desktop Evidence" className="evidence-img" />
-                      </div>
+                      </button>
                     )}
                     {item.mobileScreenshot && (
-                      <div className="evidence-slot mobile-slot" onClick={() => setLightboxImage({ url: item.mobileScreenshot, title: `${item.projectName || 'Run'} · Mobile (375×667)` })}>
-                        <div className="evidence-slot-label"><Smartphone size={12}/> Mobile (375×667)</div>
+                      <button type="button" className="evidence-slot mobile-slot" aria-label={t(`Open mobile screenshot for ${item.projectName || 'this run'}`, `Abrir captura móvil de ${item.projectName || 'esta ejecución'}`)} onClick={() => setLightboxImage({ url: item.mobileScreenshot, title: `${item.projectName || 'Run'} · Mobile (375×667)` })}>
+                        <span className="evidence-slot-label"><Smartphone size={12}/> Mobile (375×667)</span>
                         <img src={item.mobileScreenshot} alt="Mobile Evidence" className="evidence-img mobile-img" />
-                      </div>
+                      </button>
                     )}
                   </div>
                 )}
@@ -882,17 +936,18 @@ function packagePageUrl(ecosystem, name) {
 }
 // Shows exactly what an agent asked to change before anything is installed.
 function DependencyReview({ item, onDecided }) {
+  const t = useLocaleText();
   const request = item.dependencyRequest;
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const pick = pair => localeText(pair[0], pair[1]);
+  const pick = pair => t(pair[0], pair[1]);
   const manifests = request.manifests || [];
   const canSkipScripts = manifests.some(manifest => manifest.installCommandWithoutScripts);
   const decide = async (action, options = {}) => {
-    setBusy(options.ignoreScripts ? 'approve-noscripts' : action); setError('');
+    setBusy(options.allowScripts ? 'approve-scripts' : action); setError('');
     try {
-      const response = await fetch(`/api/runs/${item.id}/dependencies/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action === 'approve' ? { hash: request.hash, ignoreScripts: Boolean(options.ignoreScripts) } : { note }) });
+      const response = await fetch(`/api/runs/${item.id}/dependencies/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action === 'approve' ? { hash: request.hash, allowScripts: Boolean(options.allowScripts) } : { note }) });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || localeText('Could not save your decision.', 'No se pudo guardar tu decisión.'));
       await onDecided(body.message);
@@ -954,8 +1009,8 @@ function DependencyReview({ item, onDecided }) {
     {error && <p className="dependency-note danger" role="alert">{error}</p>}
     <div className="dependency-actions">
       <button className="text-button danger-button" type="button" disabled={Boolean(busy)} onClick={() => decide('reject')}>{busy === 'reject' ? localeText('Rejecting…', 'Rechazando…') : localeText('Reject', 'Rechazar')}</button>
-      {canSkipScripts && <button className="text-button" type="button" disabled={Boolean(busy)} title={localeText('Install without running package install scripts. Some packages may not work without them.', 'Instalar sin ejecutar scripts de instalación. Algunos paquetes pueden no funcionar sin ellos.')} onClick={() => decide('approve', { ignoreScripts: true })}>{busy === 'approve-noscripts' ? localeText('Approving…', 'Aprobando…') : localeText('Approve without install scripts', 'Aprobar sin scripts de instalación')}</button>}
-      <button className="new-button" type="button" disabled={Boolean(busy)} onClick={() => decide('approve')}><ShieldCheck size={14}/>{busy === 'approve' ? localeText('Approving…', 'Aprobando…') : localeText('Approve & install', 'Aprobar e instalar')}</button>
+      {canSkipScripts && <button className="text-button danger-button" type="button" disabled={Boolean(busy)} title={t('Higher risk: explicitly allow package install scripts to execute in the isolated worktree.', 'Mayor riesgo: permite explícitamente ejecutar scripts de instalación en el worktree aislado.')} onClick={() => window.confirm(t('Package install scripts can execute code. Allow them for this isolated install?', 'Los scripts de instalación pueden ejecutar código. ¿Permitirlos para esta instalación aislada?')) && decide('approve', { allowScripts: true })}>{busy === 'approve-scripts' ? t('Approving…', 'Aprobando…') : t('Allow scripts & install', 'Permitir scripts e instalar')}</button>}
+      <button className="new-button" type="button" disabled={Boolean(busy)} onClick={() => decide('approve')}><ShieldCheck size={14}/>{busy === 'approve' ? t('Approving…', 'Aprobando…') : t('Approve safely & install', 'Aprobar de forma segura e instalar')}</button>
     </div>
   </div>;
 }
@@ -976,11 +1031,13 @@ function GateCheckList({ checks }) {
 
 function ProjectBrainModal({ project, copy, onClose }) {
   const dialogRef = useDialogFocus(onClose);
+  const t = useLocaleText();
   const draftKey = `orbit-brain-draft:${project.id}`;
   const readDraft = () => { try { return sessionStorage.getItem(draftKey); } catch { return null; } };
   const [content, setContent] = useState(() => readDraft() ?? '');
   const savedContent = useRef('');
   const memoryBusy = useRef(false);
+  const memoryLoadRequest = useRef(0);
   const clearSavedDraft = value => {
     try {
       // A reopened editor may already have a newer draft while this save finishes.
@@ -997,26 +1054,36 @@ function ProjectBrainModal({ project, copy, onClose }) {
   const [refreshing, setRefreshing] = useState(false);
   const [normalizing, setNormalizing] = useState(false);
   const [notice, setNotice] = useState('');
-  const loadMemory = async () => {
+  const loadMemory = async signal => {
+    const requestId = ++memoryLoadRequest.current;
+    const requestedProjectId = project.id;
     setLoading(true);
     try {
-      const response = await fetch(`/api/projects/${project.id}/memory`);
+      const response = await fetch(`/api/projects/${requestedProjectId}/memory`, signal ? { signal } : undefined);
       const body = await response.json();
+      if (signal?.aborted || requestId !== memoryLoadRequest.current || requestedProjectId !== project.id) return false;
       if (!response.ok) throw new Error(body.error || copy.brainLoadError);
       const draft = readDraft();
       setContent(draft ?? body.content ?? '');
       savedContent.current = body.content || '';
       setMemoryPath(body.path || 'PROJECT_MEMORY.md');
-      if (draft !== null) setNotice(localeText('Your unsaved rules have been restored.', 'Se restauraron tus reglas sin guardar.'));
+      if (draft !== null) setNotice(t('Your unsaved rules have been restored.', 'Se restauraron tus reglas sin guardar.'));
       return true;
     } catch (error) {
-      setNotice(error.message);
+      if (!signal?.aborted && requestId === memoryLoadRequest.current) setNotice(error.message);
       return false;
     } finally {
-      setLoading(false);
+      if (!signal?.aborted && requestId === memoryLoadRequest.current) setLoading(false);
     }
   };
-  useEffect(() => { loadMemory(); }, [project.id]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setContent(readDraft() ?? '');
+    setMemoryPath('PROJECT_MEMORY.md');
+    setNotice('');
+    loadMemory(controller.signal);
+    return () => { controller.abort(); memoryLoadRequest.current++; };
+  }, [project.id]);
   const saveMemory = async () => {
     if (loading || memoryBusy.current) return;
     memoryBusy.current = true;
@@ -1063,20 +1130,20 @@ function ProjectBrainModal({ project, copy, onClose }) {
       }
       const response = await fetch(`/api/projects/${project.id}/memory/normalize`, { method: 'POST' });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || localeText('Could not structure Project Brain.', 'No se pudo estructurar el Cerebro del Proyecto.'));
+      if (!response.ok) throw new Error(body.error || t('Could not structure Project Brain.', 'No se pudo estructurar el Cerebro del Proyecto.'));
       setContent(body.content || content); savedContent.current = body.content || content;
-      setNotice(body.message || localeText('Project Brain structure added without removing existing notes.', 'La estructura del Cerebro del Proyecto se añadió sin borrar notas existentes.'));
+      setNotice(body.message || t('Project Brain structure added without removing existing notes.', 'La estructura del Cerebro del Proyecto se añadió sin borrar notas existentes.'));
     } catch (error) { setNotice(error.message); } finally { memoryBusy.current = false; setNormalizing(false); }
   };
 
   return <div className="modal-backdrop brain-backdrop">
     <section ref={dialogRef} className="modal project-brain-modal" role="dialog" aria-modal="true" aria-label={`${project.name} Project Brain`} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); saveMemory(); } }}>
-      <button className="close" onClick={onClose} aria-label="Close Project Brain"><X size={18}/></button>
+      <button className="close" onClick={onClose} aria-label={t('Close Project Brain', 'Cerrar Cerebro del Proyecto')}><X size={18}/></button>
       <div className="brain-heading"><div className="brain-icon"><Brain size={21}/></div><div><p className="eyebrow">{copy.brainEyebrow}</p><h2>{project.name} {copy.brainMemory}</h2><p>{copy.brainDescription}</p></div></div>
       <div className="brain-path">{memoryPath}</div>
-      {loading ? <div className="brain-loading">{copy.brainLoading}</div> : <textarea className="brain-editor" spellCheck="false" readOnly={saving || refreshing} value={content} onChange={event => updateContent(event.target.value)} aria-label={copy.brainEyebrow}/>}
+      {loading ? <div className="brain-loading">{copy.brainLoading}</div> : <textarea className="brain-editor" spellCheck="false" readOnly={saving || refreshing || normalizing} value={content} onChange={event => updateContent(event.target.value)} aria-label={copy.brainEyebrow}/>}
       {notice && <p className="brain-notice" role="status">{notice}</p>}
-      <div className="brain-actions"><button className="text-button brain-rescan" type="button" title="Adds safe goals, decisions, risks, and runtime sections without deleting your notes" disabled={loading || refreshing || saving || normalizing} onClick={normalizeBrain}><Layers size={14} className={normalizing ? 'spin' : ''}/>{normalizing ? localeText('Structuring…', 'Estructurando…') : localeText('Structure Brain', 'Estructurar cerebro')}</button><button className="text-button brain-rescan" type="button" title="Saves edited rules before refreshing the detected stack" disabled={loading || refreshing || saving || normalizing} onClick={refreshStack}><RefreshCw size={14} className={refreshing ? 'spin' : ''}/>{refreshing ? copy.brainScanning : copy.brainRescan}</button><button className="new-button" type="button" title="Save rules (⌘/Ctrl+S)" disabled={loading || saving || refreshing || normalizing} onClick={saveMemory}><Check size={15}/>{saving ? copy.brainSaving : copy.brainSave}</button></div>
+      <div className="brain-actions"><button className="text-button brain-rescan" type="button" title={t('Adds safe goals, decisions, risks, and runtime sections without deleting your notes', 'Añade metas, decisiones, riesgos y secciones de ejecución sin borrar tus notas')} disabled={loading || refreshing || saving || normalizing} onClick={normalizeBrain}><Layers size={14} className={normalizing ? 'spin' : ''}/>{normalizing ? t('Structuring…', 'Estructurando…') : t('Structure Brain', 'Estructurar cerebro')}</button><button className="text-button brain-rescan" type="button" title={t('Saves edited rules before refreshing the detected stack', 'Guarda las reglas editadas antes de actualizar el stack detectado')} disabled={loading || refreshing || saving || normalizing} onClick={refreshStack}><RefreshCw size={14} className={refreshing ? 'spin' : ''}/>{refreshing ? copy.brainScanning : copy.brainRescan}</button><button className="new-button" type="button" title={t('Save rules (⌘/Ctrl+S)', 'Guardar reglas (⌘/Ctrl+S)')} disabled={loading || saving || refreshing || normalizing} onClick={saveMemory}><Check size={15}/>{saving ? copy.brainSaving : copy.brainSave}</button></div>
     </section>
   </div>;
 }
@@ -1390,12 +1457,19 @@ function taskStateDescription(runState) {
 
 function TaskDetailModal({ project, task, runs = [], onClose, onRunTask, onInspectRun }) {
   const dialogRef = useDialogFocus(onClose);
+  const t = useLocaleText();
   const [detail, setDetail] = useState(null);
   const [notice, setNotice] = useState('');
   const [starting, setStarting] = useState(false);
   const runState = getTaskRunState(runs, project, task.title, task.index, Boolean(detail?.completed));
   useEffect(() => {
-    fetch(`/api/projects/${project.id}/tasks/${task.index}/explain`).then(response => response.ok ? response.json() : null).then(body => setDetail(body?.task || null)).catch(() => setDetail(null));
+    const controller = new AbortController();
+    setDetail(null);
+    fetch(`/api/projects/${project.id}/tasks/${task.index}/explain`, { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(body => { if (!controller.signal.aborted) setDetail(body?.task || null); })
+      .catch(() => { if (!controller.signal.aborted) setDetail(null); });
+    return () => controller.abort();
   }, [project.id, task.index]);
   const startTask = async () => {
     if (onRunTask) {
@@ -1408,15 +1482,26 @@ function TaskDetailModal({ project, task, runs = [], onClose, onRunTask, onInspe
     try {
       const response = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, provider: 'auto', prompt: detail.suggestedPrompt, taskIndex: task.index, taskTitle: task.title }) });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || localeText('Could not start this task.', 'No se pudo iniciar esta tarea.'));
-      setNotice(localeText('✓ Agent started in an isolated workspace. You can follow it in Orbit.', '✓ Agente iniciado en un espacio aislado. Puedes seguirlo en Orbit.'));
+      if (!response.ok) throw new Error(body.error || t('Could not start this task.', 'No se pudo iniciar esta tarea.'));
+      setNotice(t('✓ Agent started in an isolated workspace. You can follow it in Orbit.', '✓ Agente iniciado en un espacio aislado. Puedes seguirlo en Orbit.'));
     } catch (error) { setNotice(error.message); } finally { setStarting(false); }
   };
-  return <div className="modal-backdrop"><section ref={dialogRef} className="modal task-detail-modal" role="dialog" aria-modal="true" aria-label={task.title}><button className="close" onClick={onClose} aria-label={localeText('Close task details', 'Cerrar detalles de tarea')}><X size={18}/></button><p className="eyebrow">{localeText('TASK EXPLAINED', 'TAREA EXPLICADA')}</p><h2>{task.title}</h2>{detail ? <><section className="task-detail-section"><strong>{localeText('What this task does', 'Qué hace esta tarea')}</strong><p>{detail.description}</p></section><section className="task-detail-section"><strong>{localeText('Why it matters', 'Para qué sirve')}</strong><p>{detail.purpose}</p></section><p className="task-detail-status">{taskStateDescription(runState)}</p><small className="task-detail-meta">{detail.completed ? localeText('Completed', 'Completada') : localeText('Planned for', 'Planificada para')} · {detail.due}</small><div className="task-detail-actions">{runState.run && <button className="text-button" type="button" onClick={() => { onClose(); onInspectRun?.(runState.run); }}><Activity size={14}/>{localeText('Open latest run', 'Abrir última ejecución')}</button>}{!detail.completed && <button className="new-button" disabled={starting || runState.action !== 'start'} onClick={startTask}><Sparkles size={14}/>{starting ? localeText('Starting agent…', 'Iniciando agente…') : localeText('Configure & run with agent', 'Configurar y ejecutar con agente')}</button>}</div></> : <p className="empty-copy">{localeText('Loading a clear explanation for this task…', 'Cargando una explicación clara de esta tarea…')}</p>}{notice && <p className="run-notice">{notice}</p>}</section></div>;
+  return <div className="modal-backdrop"><section ref={dialogRef} className="modal task-detail-modal" role="dialog" aria-modal="true" aria-label={task.title}><button className="close" onClick={onClose} aria-label={t('Close task details', 'Cerrar detalles de tarea')}><X size={18}/></button><p className="eyebrow">{t('TASK EXPLAINED', 'TAREA EXPLICADA')}</p><h2>{task.title}</h2>{detail ? <><section className="task-detail-section"><strong>{t('What this task does', 'Qué hace esta tarea')}</strong><p>{detail.description}</p></section><section className="task-detail-section"><strong>{t('Why it matters', 'Para qué sirve')}</strong><p>{detail.purpose}</p></section><p className="task-detail-status">{taskStateDescription(runState)}</p><small className="task-detail-meta">{detail.completed ? t('Completed', 'Completada') : t('Planned for', 'Planificada para')} · {detail.due}</small><div className="task-detail-actions">{runState.run && <button className="text-button" type="button" onClick={() => { onClose(); onInspectRun?.(runState.run); }} aria-label={t(`Open latest run for ${task.title}`, `Abrir última ejecución de ${task.title}`)}><Activity size={14}/>{t('Open latest run', 'Abrir última ejecución')}</button>}{!detail.completed && <button className="new-button" disabled={starting || runState.action !== 'start'} onClick={startTask} aria-label={t(`Configure and run ${task.title} with an agent`, `Configurar y ejecutar ${task.title} con un agente`)}><Sparkles size={14}/>{starting ? t('Starting agent…', 'Iniciando agente…') : t('Configure & run with agent', 'Configurar y ejecutar con agente')}</button>}</div></> : <p className="empty-copy" role="status">{t('Loading a clear explanation for this task…', 'Cargando una explicación clara de esta tarea…')}</p>}{notice && <p className="run-notice" role="status">{notice}</p>}</section></div>;
 }
 function TaskRow({task, project, onToggle, onRunTask, runs = [], onInspectRun, index = 0}) {
-  const copy = typeof document !== 'undefined' && document.documentElement.lang === 'es' ? dictionaries.es : dictionaries.en;
+  const language = useContext(LocaleContext);
+  const copy = dictionaries[language] || dictionaries.en;
+  const t = useLocaleText();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const toggle = async () => {
+    if (saving) return;
+    setSaving(true); setSaveError('');
+    try { await onToggle(); }
+    catch (error) { setSaveError(error.message); }
+    finally { setSaving(false); }
+  };
   const title = Array.isArray(task) ? task[0] : task?.title || '';
   const due = Array.isArray(task) ? task[1] : task?.due || '';
   const completed = Boolean(Array.isArray(task) ? task[2] : task?.completed);
@@ -1427,10 +1512,10 @@ function TaskRow({task, project, onToggle, onRunTask, runs = [], onInspectRun, i
   return (
     <>
       <div className="task-row">
-        <button aria-label={copy.completeTask} onClick={onToggle} className={completed ? 'check checked' : 'check'}>
+        <button aria-label={completed ? t(`Mark ${title} incomplete`, `Marcar ${title} como pendiente`) : t(`Mark ${title} complete`, `Marcar ${title} como completada`)} aria-pressed={completed} aria-busy={saving} disabled={saving} onClick={toggle} className={completed ? 'check checked' : 'check'}>
           {completed && <Check size={13}/>}
         </button>
-        <button className="task-copy task-details-trigger" type="button" onClick={() => setDetailsOpen(true)}>
+        <button className="task-copy task-details-trigger" type="button" onClick={() => setDetailsOpen(true)} aria-label={t(`Open details for ${title}`, `Abrir detalles de ${title}`)}>
           <strong className={completed ? 'done' : ''}>{title}</strong>
           <span><i className={`mini-dot ${project.color}`}/>{project.name}</span>
         </button>
@@ -1451,18 +1536,20 @@ function TaskRow({task, project, onToggle, onRunTask, runs = [], onInspectRun, i
               type="button"
               className="task-running-badge"
               onClick={() => onInspectRun ? onInspectRun(activeRun) : setDetailsOpen(true)}
-              title={runState.action === 'respond' ? localeText('Respond to the agent', 'Responder al agente') : localeText('View progress', 'Ver progreso')}
+              title={runState.action === 'respond' ? t('Respond to the agent', 'Responder al agente') : t('View progress', 'Ver progreso')}
+              aria-label={runState.action === 'respond' ? t(`Respond to the agent working on ${title}`, `Responder al agente que trabaja en ${title}`) : t(`View progress for ${title}`, `Ver progreso de ${title}`)}
             >
-              <span className="pulse-dot"/> <span>{runState.action === 'respond' ? localeText('Respond', 'Responder') : localeText('View progress', 'Ver progreso')}</span>
+              <span className="pulse-dot"/> <span>{runState.action === 'respond' ? t('Respond', 'Responder') : t('View progress', 'Ver progreso')}</span>
             </button>
           ) : runState.action === 'retry' ? (
             <button
               type="button"
               className="task-failed-badge"
               onClick={() => onInspectRun ? onInspectRun(activeRun) : setDetailsOpen(true)}
-              title={localeText('Review the failure and retry', 'Revisa el fallo y vuelve a intentar')}
+              title={t('Review the failure and retry', 'Revisa el fallo y vuelve a intentar')}
+              aria-label={t(`Review the failed run for ${title} and retry`, `Revisar la ejecución fallida de ${title} y reintentar`)}
             >
-              <AlertCircle size={11}/> <span>{localeText('Review & retry', 'Revisar y reintentar')}</span>
+              <AlertCircle size={11}/> <span>{t('Review & retry', 'Revisar y reintentar')}</span>
             </button>
           ) : (
             <button
@@ -1470,8 +1557,9 @@ function TaskRow({task, project, onToggle, onRunTask, runs = [], onInspectRun, i
               className="task-run-btn"
               onClick={(e) => { e.stopPropagation(); onRunTask ? onRunTask(project, task, index) : setDetailsOpen(true); }}
               title={copy.runTask}
+              aria-label={t(`Start ${title} with an agent`, `Iniciar ${title} con un agente`)}
             >
-              <Play size={10} fill="currentColor"/> <span>{localeText('Start', 'Iniciar')}</span>
+              <Play size={10} fill="currentColor"/> <span>{t('Start', 'Iniciar')}</span>
             </button>
           )}
         </div>
@@ -1480,6 +1568,7 @@ function TaskRow({task, project, onToggle, onRunTask, runs = [], onInspectRun, i
           <MoreHorizontal size={18}/>
         </button>
       </div>
+      {saveError && <p className="run-notice" role="alert">{saveError}</p>}
       {detailsOpen && <TaskDetailModal project={project} task={{ title, index }} runs={runs} onClose={() => setDetailsOpen(false)} onRunTask={onRunTask} onInspectRun={onInspectRun}/>}
     </>
   );
@@ -2737,6 +2826,7 @@ function LogoGeneratorModal({ project, copy, onClose }) {
 
 function ProjectPreviewModal({ project, copy, onClose }) {
   const dialogRef = useDialogFocus(onClose);
+  const localeText = useLocaleText();
   const [preview, setPreview] = useState(null);
   const [mode, setMode] = useState('desktop');
   const [error, setError] = useState('');
@@ -2748,6 +2838,8 @@ function ProjectPreviewModal({ project, copy, onClose }) {
   const [sharing, setSharing] = useState(false);
   const [needsCloudflared, setNeedsCloudflared] = useState(false);
   const [installingCloudflared, setInstallingCloudflared] = useState(false);
+  const [dependencySetup, setDependencySetup] = useState(null);
+  const [dependencyApprovalBusy, setDependencyApprovalBusy] = useState('');
   const previewStarting = useRef(false);
   const start = async (restart = false) => {
     if (previewStarting.current) return;
@@ -2763,10 +2855,60 @@ function ProjectPreviewModal({ project, copy, onClose }) {
         setNotice(localeText('Restarting the preview. Create a new share link if needed.', 'Reiniciando la vista previa. Crea un nuevo enlace para compartir si lo necesitas.'));
       }
       const response = await fetch(`/api/projects/${project.id}/preview`, { method: 'POST' });
-      const body = await response.json();
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 409 && body.reason === 'project_dependency_approval') {
+        setDependencySetup({
+          plans: Array.isArray(body.setupPlans) ? body.setupPlans : [],
+          hash: body.setupHash || '',
+          approvalEndpoint: body.approvalEndpoint || '',
+          message: body.error || localeText('Review the dependency setup before starting this project.', 'Revisa la instalación de dependencias antes de iniciar este proyecto.')
+        });
+        return;
+      }
       if (!response.ok) throw new Error(body.error || localeText('Could not start preview server.', 'No se pudo iniciar el servidor de vista previa.'));
+      setDependencySetup(null);
       setPreview(body);
     } catch (requestError) { setError(requestError.message); } finally { previewStarting.current = false; setLoading(false); }
+  };
+  const approvePreviewDependencies = async ({ allowScripts = false } = {}) => {
+    if (!dependencySetup?.hash || !dependencySetup?.approvalEndpoint) return;
+    const expectedEndpoint = `/api/projects/${project.id}/dependencies/prepare`;
+    if (dependencySetup.approvalEndpoint !== expectedEndpoint) {
+      setError(localeText('Orbit rejected an unexpected dependency approval address.', 'Orbit rechazó una dirección inesperada para aprobar dependencias.'));
+      return;
+    }
+    if (allowScripts && !window.confirm(localeText(
+      'Package install scripts can execute code on this computer. Allow them only if you trust every listed package and command. Continue?',
+      'Los scripts de instalación pueden ejecutar código en este equipo. Permítelos solo si confías en todos los paquetes y comandos listados. ¿Continuar?'
+    ))) return;
+    setDependencyApprovalBusy(allowScripts ? 'scripts' : 'safe');
+    setError('');
+    try {
+      const response = await fetch(expectedEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consent: true, hash: dependencySetup.hash, ...(allowScripts ? { allowScripts: true } : {}) })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 409 && body.setupHash) {
+        setDependencySetup(current => ({
+          ...current,
+          hash: body.setupHash,
+          plans: Array.isArray(body.setupPlans) ? body.setupPlans : current.plans,
+          message: body.error || current.message
+        }));
+      }
+      if (!response.ok) throw new Error(body.error || localeText('Could not install the approved dependencies.', 'No se pudieron instalar las dependencias aprobadas.'));
+      setDependencySetup(null);
+      setNotice(allowScripts
+        ? localeText('Dependencies installed with package scripts explicitly enabled. Starting preview…', 'Dependencias instaladas con scripts habilitados explícitamente. Iniciando vista previa…')
+        : localeText('Dependencies installed safely with package scripts disabled. Starting preview…', 'Dependencias instaladas de forma segura con scripts deshabilitados. Iniciando vista previa…'));
+      await start();
+    } catch (approvalError) {
+      setError(approvalError.message);
+    } finally {
+      setDependencyApprovalBusy('');
+    }
   };
   const submitInspector = async event => {
     event.preventDefault();
@@ -2810,7 +2952,7 @@ function ProjectPreviewModal({ project, copy, onClose }) {
     catch { setNotice(localeText('Copy the public link from the field below.', 'Copia el enlace público desde el campo de abajo.')); }
   };
   useEffect(() => { start(); return () => { fetch(`/api/projects/${project.id}/preview`, { method: 'DELETE' }).catch(() => {}); }; }, [project.id]);
-  return <div className="modal-backdrop"><section ref={dialogRef} className="modal live-preview" role="dialog" aria-modal="true" aria-label={`${copy.livePreview}: ${project.name}`}><button className="close" onClick={onClose} aria-label={localeText('Close live preview', 'Cerrar vista previa en vivo')}><X size={18}/></button><div className="preview-header"><div><p className="eyebrow">{copy.livePreview}</p><h2>{project.name}</h2><small>{preview?.source ? `${localeText('Serving', 'Sirviendo')}: ${preview.source}` : copy.previewStarting}</small></div><div className="preview-mode"><button className={mode === 'mobile' ? 'active' : ''} onClick={() => setMode('mobile')}><Smartphone size={14}/>{copy.previewMobile}</button><button className={mode === 'desktop' ? 'active' : ''} onClick={() => setMode('desktop')}><Monitor size={14}/>{copy.previewDesktop}</button><button className={inspectorActive ? 'inspector-toggle active' : 'inspector-toggle'} onClick={() => setInspectorActive(current => !current)}><Eye size={14}/>{inspectorActive ? copy.previewCancel : copy.visualInspector}</button></div></div>{inspectorActive && <form className="visual-inspector" onSubmit={submitInspector}><input autoFocus value={inspectorPrompt} onChange={event => setInspectorPrompt(event.target.value)} placeholder={copy.previewInspectorPlaceholder}/><button className="new-button" type="submit">{copy.applyChange}</button></form>}{notice && <p className="run-notice">{notice}</p>}{loading && <p className="empty-copy">{copy.previewSandbox}</p>}{error && <div className="run-notice">{error}</div>}{preview?.url && <div className={`preview-frame ${mode}`}><iframe title={`${copy.livePreview}: ${project.name}`} src={preview.url}/></div>}{preview?.url && <section className="preview-share"><div><strong>{localeText('Share this preview', 'Compartir esta vista previa')}</strong><p>{needsCloudflared ? localeText('Cloudflare Tunnel is needed to create a temporary public link. It will be installed only after you explicitly approve it.', 'Cloudflare Tunnel es necesario para crear un enlace público temporal. Solo se instalará después de tu aprobación explícita.') : localeText('Creates a temporary public link. Anyone with the link can view this development preview until you stop it.', 'Crea un enlace público temporal. Cualquiera con el enlace podrá ver esta vista previa hasta que la detengas.')}</p></div>{sharedUrl ? <div className="preview-share-controls"><input readOnly value={sharedUrl} aria-label={localeText('Temporary public preview link', 'Enlace público temporal de vista previa')}/><button className="text-button" onClick={copySharedUrl}><Copy size={14}/>{localeText('Copy link', 'Copiar enlace')}</button><a className="text-button" href={sharedUrl} target="_blank" rel="noreferrer"><ExternalLink size={14}/>{localeText('Open', 'Abrir')}</a><button className="text-button danger-button" onClick={stopSharing}><Square size={13}/>{localeText('Stop sharing', 'Dejar de compartir')}</button></div> : needsCloudflared ? <button className="new-button" disabled={installingCloudflared} onClick={installCloudflared}>{installingCloudflared ? localeText('Installing Cloudflare Tunnel…', 'Instalando Cloudflare Tunnel…') : localeText('Install Cloudflare Tunnel', 'Instalar Cloudflare Tunnel')}</button> : <button className="new-button" disabled={sharing} onClick={sharePreview}>{sharing ? localeText('Creating secure link…', 'Creando enlace seguro…') : localeText('Share temporary preview', 'Compartir vista previa temporal')}</button>}</section>}<div className="preview-actions"><button className="text-button" disabled={loading} onClick={() => start(true)}><RefreshCw size={14}/>{copy.restartPreview}</button>{preview?.url && <a className="new-button" href={preview.url} target="_blank" rel="noreferrer">{copy.openNewTab}</a>}<button className="text-button danger-button" onClick={async () => { await fetch(`/api/projects/${project.id}/preview`, { method: 'DELETE' }); onClose(); }}><Square size={13}/>{copy.stop}</button></div></section></div>;
+  return <div className="modal-backdrop"><section ref={dialogRef} className="modal live-preview" role="dialog" aria-modal="true" aria-label={`${copy.livePreview}: ${project.name}`}><button className="close" onClick={onClose} aria-label={localeText('Close live preview', 'Cerrar vista previa en vivo')}><X size={18}/></button><div className="preview-header"><div><p className="eyebrow">{copy.livePreview}</p><h2>{project.name}</h2><small>{preview?.source ? `${localeText('Serving', 'Sirviendo')}: ${preview.source}` : copy.previewStarting}</small></div><div className="preview-mode"><button className={mode === 'mobile' ? 'active' : ''} onClick={() => setMode('mobile')}><Smartphone size={14}/>{copy.previewMobile}</button><button className={mode === 'desktop' ? 'active' : ''} onClick={() => setMode('desktop')}><Monitor size={14}/>{copy.previewDesktop}</button><button className={inspectorActive ? 'inspector-toggle active' : 'inspector-toggle'} onClick={() => setInspectorActive(current => !current)}><Eye size={14}/>{inspectorActive ? copy.previewCancel : copy.visualInspector}</button></div></div>{inspectorActive && <form className="visual-inspector" onSubmit={submitInspector}><input autoFocus value={inspectorPrompt} onChange={event => setInspectorPrompt(event.target.value)} placeholder={copy.previewInspectorPlaceholder}/><button className="new-button" type="submit">{copy.applyChange}</button></form>}{notice && <p className="run-notice">{notice}</p>}{dependencySetup && <section className="preview-dependency-approval" aria-labelledby="preview-dependency-title" aria-live="polite"><div><p className="eyebrow">{localeText('DEPENDENCY APPROVAL', 'APROBACIÓN DE DEPENDENCIAS')}</p><h3 id="preview-dependency-title">{localeText('Review before Orbit starts this project', 'Revisa antes de que Orbit inicie este proyecto')}</h3><p>{dependencySetup.message}</p></div><ul>{dependencySetup.plans.map((plan, index) => <li key={`${plan.ecosystem}-${plan.directory}-${index}`}><span>{plan.ecosystem}</span><code>{plan.command}</code><small>{localeText('Working directory', 'Directorio de trabajo')}: {plan.directory}</small></li>)}</ul><p className="preview-dependency-safety"><ShieldCheck size={14}/>{localeText('Recommended: install with package scripts disabled. Nothing runs until you approve.', 'Recomendado: instalar con scripts de paquetes deshabilitados. Nada se ejecuta hasta que lo apruebes.')}</p><div className="preview-dependency-actions"><button className="new-button" type="button" disabled={Boolean(dependencyApprovalBusy)} onClick={() => approvePreviewDependencies()}>{dependencyApprovalBusy === 'safe' ? localeText('Installing safely…', 'Instalando de forma segura…') : localeText('Approve safely & start preview', 'Aprobar de forma segura e iniciar vista previa')}</button><button className="text-button danger-button" type="button" disabled={Boolean(dependencyApprovalBusy)} onClick={() => approvePreviewDependencies({ allowScripts: true })}>{dependencyApprovalBusy === 'scripts' ? localeText('Installing with scripts…', 'Instalando con scripts…') : localeText('Allow install scripts & start', 'Permitir scripts e iniciar')}</button></div></section>}{loading && <p className="empty-copy" role="status">{copy.previewSandbox}</p>}{error && <div className="run-notice" role="alert">{error}</div>}{preview?.url && <div className={`preview-frame ${mode}`}><iframe title={`${copy.livePreview}: ${project.name}`} src={preview.url}/></div>}{preview?.url && <section className="preview-share"><div><strong>{localeText('Share this preview', 'Compartir esta vista previa')}</strong><p>{needsCloudflared ? localeText('Cloudflare Tunnel is needed to create a temporary public link. It will be installed only after you explicitly approve it.', 'Cloudflare Tunnel es necesario para crear un enlace público temporal. Solo se instalará después de tu aprobación explícita.') : localeText('Creates a temporary public link. Anyone with the link can view this development preview until you stop it.', 'Crea un enlace público temporal. Cualquiera con el enlace podrá ver esta vista previa hasta que la detengas.')}</p></div>{sharedUrl ? <div className="preview-share-controls"><input readOnly value={sharedUrl} aria-label={localeText('Temporary public preview link', 'Enlace público temporal de vista previa')}/><button className="text-button" onClick={copySharedUrl}><Copy size={14}/>{localeText('Copy link', 'Copiar enlace')}</button><a className="text-button" href={sharedUrl} target="_blank" rel="noreferrer"><ExternalLink size={14}/>{localeText('Open', 'Abrir')}</a><button className="text-button danger-button" onClick={stopSharing}><Square size={13}/>{localeText('Stop sharing', 'Dejar de compartir')}</button></div> : needsCloudflared ? <button className="new-button" disabled={installingCloudflared} onClick={installCloudflared}>{installingCloudflared ? localeText('Installing Cloudflare Tunnel…', 'Instalando Cloudflare Tunnel…') : localeText('Install Cloudflare Tunnel', 'Instalar Cloudflare Tunnel')}</button> : <button className="new-button" disabled={sharing} onClick={sharePreview}>{sharing ? localeText('Creating secure link…', 'Creando enlace seguro…') : localeText('Share temporary preview', 'Compartir vista previa temporal')}</button>}</section>}<div className="preview-actions"><button className="text-button" disabled={loading || Boolean(dependencyApprovalBusy)} onClick={() => start(true)}><RefreshCw size={14}/>{copy.restartPreview}</button>{preview?.url && <a className="new-button" href={preview.url} target="_blank" rel="noreferrer">{copy.openNewTab}</a>}<button className="text-button danger-button" onClick={async () => { await fetch(`/api/projects/${project.id}/preview`, { method: 'DELETE' }); onClose(); }}><Square size={13}/>{copy.stop}</button></div></section></div>;
 }
 
 const SUGGESTED_LOCAL_MODELS = [
@@ -4165,6 +4307,7 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
   const [model, setModel] = useState(savedComposer.model || 'auto');
   const [localAction, setLocalAction] = useState(savedComposer.localAction || 'code');
   const [prompt, setPrompt] = useState(savedComposer.prompt || '');
+  const promptRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
   const activeRunIdRef = useRef(null);
   const [notice, setNotice] = useState('');
@@ -4189,11 +4332,17 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [skills, setSkills] = useState([]);
   const [skillId, setSkillId] = useState(savedComposer.skillId || '');
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [skillError, setSkillError] = useState('');
+  const [skillFetchVersion, setSkillFetchVersion] = useState(0);
   const activeSkill = skills.find(skill => skill.id === skillId);
   const [optimizing, setOptimizing] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [taskMetadata, setTaskMetadata] = useState(savedComposer.taskMetadata || null);
+  const composerRevision = useRef(0);
   useEffect(() => {
+    // A revision also detects editing away and back to the same text.
+    composerRevision.current++;
     try { sessionStorage.setItem('orbit-agent-composer', JSON.stringify({ projectId, provider, model, localAction, prompt, taskMetadata, runMode, plannerProvider, coderProvider, plannerModel, coderModel, selectedProviders, selectedProviderModels, comparisonSlots, skillId })); } catch {}
   }, [projectId, provider, model, localAction, prompt, taskMetadata, runMode, plannerProvider, coderProvider, plannerModel, coderModel, selectedProviders, selectedProviderModels, comparisonSlots, skillId]);
   useEffect(() => {
@@ -4217,17 +4366,21 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
     } catch (error) { setNotice(error.message); } finally { setClearingHistory(false); }
   };
   const optimizePrompt = async () => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || optimizing) return;
+    const revision = composerRevision.current;
     setOptimizing(true); setNotice(copy.optimizing);
     try {
       const response = await fetch('/api/prompts/optimize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, prompt }) });
       const body = await response.json(); if (!response.ok) throw new Error(body.error || copy.optimizeError);
-      setPrompt(body.optimized); setNotice(`${body.notice} Estimated savings: ~${body.tokenSavingsEstimate} tokens.`);
+      if (composerRevision.current === revision) {
+        setPrompt(body.optimized); setNotice(`${body.notice} Estimated savings: ~${body.tokenSavingsEstimate} tokens.`);
+      } else setNotice(localeText('Your newer draft was kept. Optimize again to update it.', 'Se conservó tu borrador más reciente. Optimízalo de nuevo para actualizarlo.'));
     } catch (error) { setNotice(error.message); } finally { setOptimizing(false); }
   };
   const submit = async event => {
     event.preventDefault();
-    if (submitting || !prompt.trim() || !projectId) return;
+    if (submitting || !prompt.trim() || !projectId || (skillId && !skillsLoaded)) return;
+    const revision = composerRevision.current;
     setSubmitting(true); setNotice('');
     try {
       let endpoint = '/api/runs';
@@ -4265,13 +4418,12 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
       const body = await response.json();
       if (!response.ok) {
         if (response.status === 409 && body.collisionDetected) {
-          setCollisionData({ endpoint, payload, activeRuns: body.activeRuns || [] });
+          setCollisionData({ endpoint, payload, revision, activeRuns: body.activeRuns || [] });
           return;
         }
         throw new Error(body.error || copy.executionStartError);
       }
-      setPrompt('');
-      setTaskMetadata(null);
+      if (composerRevision.current === revision) { setPrompt(''); setTaskMetadata(null); }
       if (runMode === 'parallel') {
         setNotice(copy.modelsParallel.replace('{count}', body.runs?.length || 2));
         if (body.groupId) setActiveGroupId(body.groupId);
@@ -4286,8 +4438,9 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
     } catch (error) { setNotice(error.message); } finally { setSubmitting(false); }
   };
   const executeConcurrent = async () => {
-    if (!collisionData) return;
-    const { endpoint, payload } = collisionData;
+    if (!collisionData || submitting) return;
+    const { endpoint, payload, revision } = collisionData;
+    setSubmitting(true);
     setCollisionData(null);
     try {
       const response = await fetch(endpoint, {
@@ -4297,8 +4450,7 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || copy.executionStartError);
-      setPrompt('');
-      setTaskMetadata(null);
+      if (composerRevision.current === revision) { setPrompt(''); setTaskMetadata(null); }
       if (runMode === 'parallel') {
         setNotice(copy.modelsParallel.replace('{count}', body.runs?.length || 2));
         if (body.groupId) setActiveGroupId(body.groupId);
@@ -4310,7 +4462,7 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
         if (body.id) inspectRun(body.id);
       }
       refresh();
-    } catch (error) { setNotice(error.message); }
+    } catch (error) { setNotice(error.message); } finally { setSubmitting(false); }
   };
 
   const inspectRun = id => {
@@ -4357,7 +4509,29 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
     };
     poll(); return () => { controller.abort(); clearTimeout(timer); };
   }, [activeRunId]);
-  useEffect(() => { fetch('/api/skills').then(r => r.ok ? r.json() : []).then(items => setSkills(items.filter(item => item.status === 'approved'))).catch(() => {}); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    setSkillError(''); setSkillsLoaded(false);
+    fetch('/api/skills', { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(localeText('Could not load the skill library.', 'No se pudo cargar la biblioteca de habilidades.'));
+        const items = await response.json();
+        if (!Array.isArray(items)) throw new Error(localeText('Could not load the skill library.', 'No se pudo cargar la biblioteca de habilidades.'));
+        return items.filter(item => item.status === 'approved');
+      })
+      .then(items => {
+        if (controller.signal.aborted) return;
+        setSkills(items); setSkillsLoaded(true);
+      })
+      .catch(error => { if (!controller.signal.aborted) setSkillError(error.message); });
+    return () => controller.abort();
+  }, [skillFetchVersion]);
+  useEffect(() => {
+    if (skillsLoaded && skillId && !skills.some(skill => skill.id === skillId)) {
+      setSkillId('');
+      setNotice(localeText('The selected skill is no longer available. It was removed from this draft.', 'La habilidad seleccionada ya no está disponible. Se quitó de este borrador.'));
+    }
+  }, [skillsLoaded, skills, skillId]);
   return <section className="agent-console">
     <div className="agent-intro"><div><p className="eyebrow">{copy.agentControlPlane}</p><h2>{localeText('Start a task. Follow the work. Review the result.', 'Inicia una tarea. Sigue el trabajo. Revisa el resultado.')}</h2></div><button className="icon-button" onClick={refresh} aria-label={copy.refreshStatus}><RefreshCw size={17}/></button></div>
     <WorkSummary runs={runs} onOpen={run => inspectRun(run.id)}/>
@@ -4388,13 +4562,15 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
           </button>
         </div>
       )}
-      <div className="prompt-label"><label htmlFor="agent-request">{copy.promptLabel}</label><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><button className={`voice-button ${isListening ? 'listening' : ''}`} type="button" onClick={toggleListening} title={isListening ? copy.stopDictation : copy.dictateTitle}>{isListening ? <MicOff size={13}/> : <Mic size={13}/>}{isListening ? copy.listening : copy.dictate}</button><button className="optimize-button" type="button" onClick={optimizePrompt} disabled={optimizing || !prompt.trim()}><Sparkles size={13}/>{optimizing ? copy.optimizing : copy.optimize}</button></div></div><textarea id="agent-request" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={copy.askAgent}/>
+      <div className="prompt-label"><label htmlFor="agent-request">{copy.promptLabel}</label><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><button className={`voice-button ${isListening ? 'listening' : ''}`} type="button" onClick={toggleListening} title={isListening ? copy.stopDictation : copy.dictateTitle}>{isListening ? <MicOff size={13}/> : <Mic size={13}/>}{isListening ? copy.listening : copy.dictate}</button><button className="optimize-button" type="button" onClick={optimizePrompt} disabled={optimizing || !prompt.trim()}><Sparkles size={13}/>{optimizing ? copy.optimizing : copy.optimize}</button></div></div><textarea ref={promptRef} id="agent-request" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={copy.askAgent}/>
       {runMode === 'direct' && <><label>{copy.providerLabel}<select value={provider} onChange={e => { setProvider(e.target.value); setModel('auto'); }}><option value="auto">{copy.autoProvider}</option>{providers.map(item => <option disabled={!item.available} key={item.id} value={item.id}>{item.label}{item.available ? '' : ' · requires setup'}</option>)}</select></label><RunModelSelect provider={provider} providers={providers} value={model} onChange={setModel}/>{!['auto', 'codex', 'claude'].includes(provider) && <fieldset className="local-action-selector"><legend>{localeText('What should this model do?', '¿Qué debe hacer este modelo?')}</legend><label><input type="radio" name="local-action" value="code" checked={localAction === 'code'} onChange={() => setLocalAction('code')}/><span><strong>{localeText('Code in an isolated worktree', 'Programar en un worktree aislado')}</strong><small>{localeText('Create a focused patch, verify it, and wait for your approval before merge.', 'Crea un cambio enfocado, lo verifica y espera tu aprobación antes de fusionar.')}</small></span></label><label><input type="radio" name="local-action" value="plan" checked={localAction === 'plan'} onChange={() => setLocalAction('plan')}/><span><strong>{localeText('Plan or review only', 'Solo planificar o revisar')}</strong><small>{localeText('Answer without modifying project files.', 'Responde sin modificar archivos del proyecto.')}</small></span></label><p><ShieldCheck size={13}/>{localeText('Changes stay in an isolated workspace. If a patch fails, retry the same model, narrow the task, or choose another.', 'Los cambios quedan en un espacio aislado. Si fallan, reintenta con el mismo modelo, reduce la tarea o elige otro.')}</p></fieldset>}</>}
       {prompt.trim() && runMode === 'direct' && <ModelRecommendation prompt={prompt} provider={provider} model={model} providers={providers} onSelect={(nextProvider, nextModel) => { setProvider(nextProvider); setModel(nextModel); }}/>}
       {runMode === 'parallel' && <div className="parallel-select"><span className="eyebrow">{copy.select23Models}</span><p>Compare local models with each other or with cloud models. Each gets an independent workspace.</p><label>Comparison mode<select value={localAction} onChange={event => setLocalAction(event.target.value)}><option value="code">Code</option><option value="plan">Plan / review</option></select></label>{comparisonSlots.map((slot, index) => <div className="parallel-model-row" key={index}><label>Model slot {index + 1}<select aria-label={`Provider for slot ${index + 1}`} value={slot.provider} onChange={event => setComparisonSlots(current => current.map((item, i) => i === index ? { provider: event.target.value, model: 'auto' } : item))}><option value="" disabled>Choose provider</option>{providers.filter(item => item.available).map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><RunModelSelect provider={slot.provider} providers={providers} value={slot.model} onChange={model => setComparisonSlots(current => current.map((item, i) => i === index ? { ...item, model } : item))}/>{comparisonSlots.length > 2 && <button type="button" className="text-button" onClick={() => setComparisonSlots(current => current.filter((_, i) => i !== index))}>Remove slot</button>}</div>)}{comparisonSlots.length < 3 && <button type="button" className="text-button" onClick={() => setComparisonSlots(current => [...current, { provider: current[0].provider, model: 'auto' }])}>Add model slot</button>}</div>}
       {runMode === 'pipeline' && <div className="pipeline-config-row"><div><label>{copy.plannerLabel}<select value={plannerProvider} onChange={e => { setPlannerProvider(e.target.value); setPlannerModel('auto'); }}><option value="auto">{copy.autoProvider} (Claude / Gemini / DeepSeek)</option>{providers.filter(p => p.available).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label><RunModelSelect provider={plannerProvider} providers={providers} value={plannerModel} onChange={setPlannerModel}/></div><div><label>{copy.coderLabel}<select value={coderProvider} onChange={e => { setCoderProvider(e.target.value); setCoderModel('auto'); }}><option value="auto">{copy.autoProvider} (Codex / Claude / Local)</option>{providers.filter(p => p.available && (p.mode === 'write' || p.id === 'local')).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label><RunModelSelect provider={coderProvider} providers={providers} value={coderModel} onChange={setCoderModel}/></div></div>}
       {skills.length>0&&<label>{copy.approvedSkillOptional}<select value={skillId} onChange={e=>setSkillId(e.target.value)}><option value="">{copy.noSkill}</option>{skills.map(skill=><option key={skill.id} value={skill.id}>{skill.name}</option>)}</select>{activeSkill && <span className="selected-skill-summary"><Sparkles size={12}/><b>{activeSkill.name}</b>{activeSkill.description}</span>}<small className="skill-select-help">{copy.skillSelectHelp}</small></label>}
-      <small className="composer-keyboard-hint">Cmd/Ctrl+Enter to send · Enter for a new line</small><button className="new-button" type="submit" disabled={submitting || !prompt.trim() || !projectId}><Sparkles size={16}/>{copy.sendToAgent}</button>{notice && <p className="run-notice">{notice}</p>}</form>
+      {!skillsLoaded && skillId && <p className="run-notice" role="status">{localeText('Checking the selected skill before sending…', 'Comprobando la habilidad seleccionada antes de enviar…')} <button type="button" className="text-button" onClick={() => setSkillId('')}>{localeText('Remove selected skill', 'Quitar habilidad seleccionada')}</button></p>}
+      {skillError && <div className="run-notice" role="alert">{skillError} <button type="button" className="text-button" onClick={() => setSkillFetchVersion(version => version + 1)}>{localeText('Retry skill library', 'Reintentar biblioteca de habilidades')}</button></div>}
+      <small className="composer-keyboard-hint">Cmd/Ctrl+Enter to send · Enter for a new line</small><button className="new-button" type="submit" disabled={submitting || !prompt.trim() || !projectId || Boolean(skillId && !skillsLoaded)}><Sparkles size={16}/>{copy.sendToAgent}</button>{notice && <p className="run-notice">{notice}</p>}</form>
       <div className="right-stack"><WorkActivity runs={runs} projects={projects} onOpen={run => inspectRun(run.id)} onClear={clearHistory} clearing={clearingHistory}/><details className="panel provider-panel"><summary>{localeText("Connected models", "Modelos conectados")} · {providers.filter(item => item.available).length}/{providers.length}</summary><p className="empty-copy">{localeText("Provider setup is in Settings. Repository connections are in each project’s Settings tab.", "Configura proveedores en Ajustes y repositorios en los ajustes de cada proyecto.")}</p>{providers.map(item => <div className="provider-row" key={item.id}><span className={item.available ? "provider-state online" : "provider-state"}/><div><strong>{item.label}</strong><small>{item.detail}</small></div><em>{item.available ? localeText("Connected", "Conectado") : localeText("Setup required", "Requiere configuración")}</em></div>)}</details></div></div>
 
 
@@ -4410,7 +4586,7 @@ function AgentConsole({ projects, providers, runs, copy, refresh, initialRunId, 
     {activeRun && (
       <RunMonitor key={activeRun.id} run={activeRun} providers={providers} copy={copy} onOpenRun={inspectRun} onClose={() => { activeRunIdRef.current = null; setActiveRun(null); setActiveRunId(null); }}/>
     )}
-    {activeGroupId && <ParallelComparator groupId={activeGroupId} copy={copy} onClose={() => setActiveGroupId(null)}/>}
+    {activeGroupId && <ParallelComparator groupId={activeGroupId} copy={copy} returnFocusRef={promptRef} onClose={() => setActiveGroupId(null)}/>}
   </section>;
 }
 
@@ -4487,16 +4663,63 @@ function CollisionConfirmationModal({ collisionData, onClose, onConfirmConcurren
   );
 }
 
-function ParallelComparator({ groupId, copy, onClose }) { const dialogRef = useDialogFocus(onClose); const [group, setGroup] = useState(null); const text = { eyebrow: localeText('PARALLEL COMPARISON', 'COMPARACIÓN EN PARALELO'), done: localeText('All models finished.', 'Todos los modelos terminaron.'), working: localeText('Models are currently working…', 'Los modelos están trabajando…'), active: localeText('Working…', 'Trabajando…'), fallback: localeText('Completed without summary.', 'Finalizado sin resumen.'), files: localeText('CHANGED FILES', 'ARCHIVOS MODIFICADOS'), close: localeText('Close comparison', 'Cerrar comparación') }; useEffect(() => { const poll = async () => { const response = await fetch(`/api/runs/group/${groupId}`); if (response.ok) setGroup(await response.json()); }; poll(); const timer = setInterval(poll, 3000); return () => clearInterval(timer); }, [groupId]); if (!group) return null; return <div className="modal-backdrop"><section ref={dialogRef} className="modal comparator-modal" role="dialog" aria-modal="true" aria-label={text.eyebrow}><button className="close" onClick={onClose} aria-label={text.close}><X size={18}/></button><p className="eyebrow">{text.eyebrow}</p><h2>{group.runs[0]?.projectName}</h2><p className="comparator-copy">{group.done ? text.done : text.working}</p><div className="comparator-grid">{group.runs.map(run => <article className={`comparator-card ${run.status}`} key={run.id}><div className="comparator-header"><span className={`run-status ${run.status}`}/><strong>{run.provider}</strong><em>{run.model}</em></div><div className="comparator-body"><p>{run.status === 'running' || run.status === 'queued' ? text.active : run.result || run.error || text.fallback}</p>{run.changedFiles?.length ? <div className="comparator-files"><small>{text.files}</small>{run.changedFiles.map(file => <span key={file}>{file}</span>)}</div> : null}</div></article>)}</div></section></div>; }
+function ParallelComparator({ groupId, onClose, returnFocusRef }) {
+  const dialogRef = useDialogFocus(onClose);
+  const [group, setGroup] = useState(null);
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const text = { eyebrow: localeText('PARALLEL COMPARISON', 'COMPARACIÓN EN PARALELO'), done: localeText('All models finished.', 'Todos los modelos terminaron.'), working: localeText('Models are currently working…', 'Los modelos están trabajando…'), active: localeText('Working…', 'Trabajando…'), fallback: localeText('Completed without summary.', 'Finalizado sin resumen.'), files: localeText('CHANGED FILES', 'ARCHIVOS MODIFICADOS'), close: localeText('Close comparison', 'Cerrar comparación') };
+  useEffect(() => () => { returnFocusRef?.current?.focus({ preventScroll: true }); }, [returnFocusRef]);
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer;
+    setError('');
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/runs/group/${groupId}`, { signal: controller.signal });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || localeText('Could not load this comparison.', 'No se pudo cargar esta comparación.'));
+        if (controller.signal.aborted) return;
+        setGroup(body); setError('');
+        if (!body.done) timer = setTimeout(poll, 3000);
+      } catch (failure) { if (!controller.signal.aborted) setError(failure.message); }
+    };
+    poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [groupId, attempt]);
+  return <div className="modal-backdrop"><section ref={dialogRef} className="modal comparator-modal" role="dialog" aria-modal="true" aria-label={text.eyebrow}>
+    <button className="close" onClick={onClose} aria-label={text.close}><X size={18}/></button><p className="eyebrow">{text.eyebrow}</p>
+    {error && <div className="run-notice" role="alert">{error}<button type="button" className="text-button" onClick={() => setAttempt(value => value + 1)}>{localeText('Retry', 'Reintentar')}</button></div>}
+    {!group && !error && <p role="status">{localeText('Loading comparison…', 'Cargando comparación…')}</p>}
+    {group && <><h2>{group.runs[0]?.projectName}</h2><p className="comparator-copy">{group.done ? text.done : text.working}</p><div className="comparator-grid">{group.runs.map(run => <article className={`comparator-card ${run.status}`} key={run.id}><div className="comparator-header"><span className={`run-status ${run.status}`}/><strong>{run.provider}</strong><em>{run.model}</em></div><div className="comparator-body"><p>{run.status === 'running' || run.status === 'queued' ? text.active : run.result || run.error || text.fallback}</p>{run.changedFiles?.length ? <div className="comparator-files"><small>{text.files}</small>{run.changedFiles.map(file => <span key={file}>{file}</span>)}</div> : null}</div></article>)}</div></>}
+  </section></div>;
+}
 
 function FolderPicker({ copy, onClose, onSelect, title }) {
   const dialogRef = useDialogFocus(onClose);
+  const t = useLocaleText();
   const [directory, setDirectory] = useState(null);
   const [error, setError] = useState('');
-  const open = async path => { const response = await fetch(`/api/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`); const body = await response.json(); if (!response.ok) setError(body.error); else { setDirectory(body); setError(''); } };
-  useEffect(() => { open(); }, []);
-  const text = { eyebrow: localeText('LOCAL DIRECTORY PICKER', 'SELECTOR DE CARPETAS LOCALES'), title: title || localeText('Select repository folder', 'Selecciona la carpeta del repositorio'), use: localeText('Use this directory', 'Usar esta carpeta'), git: localeText('Git repo', 'Repositorio Git'), loading: localeText('Loading directories…', 'Cargando carpetas…'), close: localeText('Close folder picker', 'Cerrar selector de carpetas') };
-  return <div className="modal-backdrop"><section ref={dialogRef} className="modal folder-picker" role="dialog" aria-modal="true" aria-label={text.title}><button className="close" onClick={onClose} aria-label={text.close}><X size={18}/></button><p className="eyebrow">{text.eyebrow}</p><h2>{text.title}</h2>{error && <p className="picker-error">{error}</p>}{directory ? <><div className="breadcrumb"><button disabled={!directory.parent} onClick={() => open(directory.parent)} aria-label={localeText('Go to parent folder', 'Ir a la carpeta superior')}>←</button><span>{directory.path}</span></div><button className="use-folder" onClick={() => onSelect(directory.path)}>{text.use} <ChevronRight size={16}/></button><div className="folder-list">{directory.entries.map(entry => <button key={entry.path} onClick={() => open(entry.path)}><FolderOpen size={16}/><span>{entry.name}</span>{entry.isGit && <em>{text.git}</em>}<ChevronRight size={15}/></button>)}</div></> : <p className="empty-copy">{text.loading}</p>}</section></div>;
+  const directoryRequest = useRef({ id: 0, controller: null });
+  const open = async path => {
+    directoryRequest.current.controller?.abort();
+    const controller = new AbortController();
+    const requestId = directoryRequest.current.id + 1;
+    directoryRequest.current = { id: requestId, controller };
+    setError('');
+    try {
+      const response = await fetch(`/api/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`, { signal: controller.signal });
+      const body = await response.json();
+      if (controller.signal.aborted || directoryRequest.current.id !== requestId) return;
+      if (!response.ok) setError(body.error || t('Could not open this folder.', 'No se pudo abrir esta carpeta.'));
+      else setDirectory(body);
+    } catch (requestError) {
+      if (!controller.signal.aborted && directoryRequest.current.id === requestId) setError(requestError.message);
+    }
+  };
+  useEffect(() => { open(); return () => directoryRequest.current.controller?.abort(); }, []);
+  const text = { eyebrow: t('LOCAL DIRECTORY PICKER', 'SELECTOR DE CARPETAS LOCALES'), title: title || t('Select repository folder', 'Selecciona la carpeta del repositorio'), use: t('Use this directory', 'Usar esta carpeta'), git: t('Git repo', 'Repositorio Git'), loading: t('Loading directories…', 'Cargando carpetas…'), close: t('Close folder picker', 'Cerrar selector de carpetas') };
+  return <div className="modal-backdrop"><section ref={dialogRef} className="modal folder-picker" role="dialog" aria-modal="true" aria-label={text.title}><button className="close" onClick={onClose} aria-label={text.close}><X size={18}/></button><p className="eyebrow">{text.eyebrow}</p><h2>{text.title}</h2>{error && <p className="picker-error" role="alert">{error}</p>}{directory ? <><div className="breadcrumb"><button disabled={!directory.parent} onClick={() => open(directory.parent)} aria-label={t('Go to parent folder', 'Ir a la carpeta superior')}>←</button><span>{directory.path}</span></div><button className="use-folder" onClick={() => onSelect(directory.path)}>{text.use} <ChevronRight size={16}/></button><div className="folder-list">{directory.entries.map(entry => <button key={entry.path} onClick={() => open(entry.path)} aria-label={t(`Open folder ${entry.name}`, `Abrir carpeta ${entry.name}`)}><FolderOpen size={16}/><span>{entry.name}</span>{entry.isGit && <em>{text.git}</em>}<ChevronRight size={15}/></button>)}</div></> : <p className="empty-copy" role="status">{text.loading}</p>}</section></div>;
 }
 
 function statusCopy(status) {
@@ -4549,7 +4772,10 @@ function englishActivityText(value) {
 }
 
 function ActivityStepItem({ step, isLast }) {
+  const language = useContext(LocaleContext);
+  const localeText = useLocaleText();
   const [showOutput, setShowOutput] = useState(false);
+  const activityText = value => language === 'en' ? englishActivityText(value) : value;
 
   const getIcon = () => {
     switch (step.type) {
@@ -4592,11 +4818,11 @@ function ActivityStepItem({ step, isLast }) {
       </div>
       <div className="activity-step-body">
         <div className="activity-step-top">
-          <strong className="activity-step-title">{englishActivityText(step.title)}</strong>
+          <strong className="activity-step-title">{activityText(step.title)}</strong>
           {getBadge()}
         </div>
         <p className={`activity-step-detail ${isCommand ? 'code-font' : ''}`}>
-          {isCommand ? `$ ${step.detail}` : englishActivityText(step.detail)}
+          {isCommand ? `$ ${step.detail}` : activityText(step.detail)}
         </p>
 
         {step.output && (
@@ -4607,7 +4833,7 @@ function ActivityStepItem({ step, isLast }) {
               onClick={() => setShowOutput(!showOutput)}
             >
               {showOutput ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-              {showOutput ? localeText('Hide output', 'Ocultar salida') : localeText('View command output', 'Ver salida del comando')}
+            {showOutput ? localeText('Hide output', 'Ocultar salida') : localeText('View command output', 'Ver salida del comando')}
             </button>
             {showOutput && (
               <pre className="activity-output-preview">{step.output}</pre>
@@ -4621,6 +4847,7 @@ function ActivityStepItem({ step, isLast }) {
 
 function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dictionaries.en }) {
   const dialogRef = useDialogFocus(onClose);
+  const localeText = useLocaleText();
   const draftKey = `orbit-run-composer:${run.id}`;
   const [savedDraft] = useState(() => { try { return JSON.parse(sessionStorage.getItem(draftKey) || '{}'); } catch { return {}; } });
   const cleanAgentText = (value, isQuestion = false) => {
@@ -4653,7 +4880,7 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
   const [followUpNotice, setFollowUpNotice] = useState('');
   const [sending, setSending] = useState(false);
   const [reviewMode, setReviewMode] = useState(run.review?.mode || 'off');
-  const [reviewProvider, setReviewProvider] = useState(run.review?.provider || 'local');
+  const [reviewProvider, setReviewProvider] = useState(run.review?.provider || '');
   const [reviewModel, setReviewModel] = useState(run.review?.model || 'auto');
   const [reviewing, setReviewing] = useState(false);
   const [reviewNotice, setReviewNotice] = useState('');
@@ -4682,8 +4909,19 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
   };
   const reviewerProviders = providers.filter(item => ['local', 'gemini', 'deepseek', 'groq', 'mistral', 'xai'].includes(item.id) && item.available);
   const selectedReviewer = reviewerProviders.find(item => item.id === reviewProvider);
+  const reviewerProviderIds = reviewerProviders.map(item => item.id).join('|');
+  useEffect(() => {
+    if (reviewProvider && !reviewerProviders.some(item => item.id === reviewProvider)) {
+      setReviewProvider('');
+      setReviewModel('auto');
+    }
+  }, [reviewProvider, reviewerProviderIds]);
   const startIndependentReview = async () => {
     if (reviewing) return;
+    if (!selectedReviewer) {
+      setReviewNotice(localeText('Select a connected reviewer before starting. Orbit will not silently choose a cloud or paid model.', 'Selecciona un revisor conectado antes de comenzar. Orbit no elegirá silenciosamente un modelo cloud o de pago.'));
+      return;
+    }
     setReviewing(true); setReviewNotice('');
     const request = async cloudConsent => fetch(`/api/runs/${run.id}/review`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4693,7 +4931,7 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
       let response = await request(false);
       let body = await response.json().catch(() => ({}));
       if (response.status === 409 && body.requiresCloudConsent) {
-        const allowed = window.confirm(localeText('This sends a limited, redacted diff and verification evidence to the selected cloud reviewer. It does not send your full repository, credentials, or chat history. Continue?', 'Esto envía un diff limitado y redactado junto con evidencia de verificación al revisor cloud seleccionado. No envía el repositorio completo, credenciales ni historial del chat. ¿Continuar?'));
+        const allowed = window.confirm(localeText('This sends minimized review evidence after Orbit applies best-effort secret detection and redaction. It does not intentionally send your full repository or chat history. Review the selected provider’s privacy terms before continuing. Continue?', 'Esto envía evidencia mínima de revisión después de que Orbit aplica detección y redacción de secretos con el mejor esfuerzo. No envía intencionalmente el repositorio completo ni el historial del chat. Revisa las condiciones de privacidad del proveedor seleccionado antes de continuar. ¿Continuar?'));
         if (!allowed) { setReviewNotice(localeText('Cloud review was not started.', 'La revisión cloud no se inició.')); return; }
         response = await request(true); body = await response.json().catch(() => ({}));
       }
@@ -4811,7 +5049,8 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
 
   const review = run.review || { mode: 'off', status: 'not_requested' };
   const reviewRequired = review.mode === 'required';
-  const canMerge = run.gateStatus === 'verified_ready' && Boolean(run.branch && run.worktreePath) && (!reviewRequired || review.status === 'approved');
+  const canMerge = run.gateStatus === 'verified_ready' && Boolean(run.branch && run.worktreePath)
+    && (!reviewRequired || (review.status === 'approved' && review.evidenceCoverage?.complete === true));
   const canOpenInteractiveTerminal = ['codex', 'claude'].includes(run.provider) && run.status !== 'running';
   const conversationMessages = run.messages && run.messages.length > 0
     ? run.messages
@@ -5042,9 +5281,12 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
                     <div className="review-panel-heading"><div><strong>{localeText('Independent review', 'Revisión independiente')}</strong><small>{localeText('Optional second opinion. Required mode blocks merge until a current reviewer approves.', 'Segunda opinión opcional. El modo obligatorio bloquea la fusión hasta que un revisor actual apruebe.')}</small></div>{review.status !== 'not_requested' && <span className={`review-status ${review.status}`}>{review.status.replace('_', ' ')}</span>}</div>
                     <div className="review-controls">
                       <select value={reviewMode} onChange={event => setReviewMode(event.target.value)} aria-label="Independent review policy"><option value="off">{localeText('Off', 'Desactivada')}</option><option value="advisory">{localeText('Advisory', 'Consultiva')}</option><option value="required">{localeText('Required before merge', 'Obligatoria antes de fusionar')}</option></select>
-                      {reviewMode !== 'off' && <><select value={reviewProvider} onChange={event => { setReviewProvider(event.target.value); setReviewModel('auto'); }} aria-label="Independent reviewer provider">{reviewerProviders.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select><input list={`review-models-${run.id}`} value={reviewModel === 'auto' ? '' : reviewModel} onChange={event => setReviewModel(event.target.value || 'auto')} aria-label="Independent reviewer model" placeholder={selectedReviewer?.activeModel || 'Default model'}/><datalist id={`review-models-${run.id}`}>{(selectedReviewer?.models || []).map(model => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}</datalist><button type="button" className="text-button" disabled={reviewing || !reviewerProviders.length} onClick={startIndependentReview}>{reviewing ? localeText('Reviewing…', 'Revisando…') : localeText('Run review', 'Revisar')}</button></>}
+                      {reviewMode !== 'off' && <><select value={selectedReviewer ? reviewProvider : ''} onChange={event => { setReviewProvider(event.target.value); setReviewModel('auto'); }} aria-label="Independent reviewer provider" disabled={!reviewerProviders.length}><option value="" disabled>{reviewerProviders.length ? localeText('Select reviewer…', 'Seleccionar revisor…') : localeText('No reviewer connected', 'Ningún revisor conectado')}</option>{reviewerProviders.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select><input list={`review-models-${run.id}`} value={reviewModel === 'auto' ? '' : reviewModel} onChange={event => setReviewModel(event.target.value || 'auto')} aria-label="Independent reviewer model" placeholder={selectedReviewer?.activeModel || localeText('Select a reviewer first', 'Selecciona primero un revisor')} disabled={!selectedReviewer}/><datalist id={`review-models-${run.id}`}>{(selectedReviewer?.models || []).map(model => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}</datalist><button type="button" className="text-button" disabled={reviewing || !selectedReviewer} onClick={startIndependentReview}>{reviewing ? localeText('Reviewing…', 'Revisando…') : localeText('Run review', 'Revisar')}</button></>}
                     </div>
+                    {reviewMode !== 'off' && !reviewerProviders.length && <p className="review-required-note">{localeText('No read-only reviewer is connected. Connect Ollama or explicitly configure a supported cloud reviewer in Settings.', 'No hay un revisor de solo lectura conectado. Conecta Ollama o configura explícitamente un revisor cloud compatible en Ajustes.')}</p>}
+                    {reviewMode !== 'off' && reviewerProviders.length > 0 && !selectedReviewer && <p className="review-required-note">{localeText('Choose the visible reviewer you want to use. Cloud reviewers require a separate privacy confirmation.', 'Elige el revisor visible que quieres usar. Los revisores cloud requieren una confirmación de privacidad adicional.')}</p>}
                     {review.summary && <p className="review-summary">{review.summary}</p>}
+                    {review.evidenceCoverage?.complete === false && <p className="review-required-note">{localeText('Evidence coverage is incomplete. Protected, sensitive, unsupported, oversized, or bounded content was omitted and has not been reviewed.', 'La cobertura de evidencia está incompleta. Se omitió contenido protegido, sensible, no compatible, demasiado grande o limitado, y no se ha revisado.')}</p>}
                     {review.findings?.length > 0 && <ul className="review-findings">{review.findings.map((finding, index) => <li key={`${finding.path || 'finding'}-${index}`} className={finding.severity}><b>{finding.severity}</b> {finding.path && <code>{finding.path}{finding.line ? `:${finding.line}` : ''}</code>} {finding.message}</li>)}</ul>}
                     {reviewRequired && review.status !== 'approved' && <p className="review-required-note">{localeText('Merge stays locked until this reviewer approves the current worktree evidence.', 'La fusión permanece bloqueada hasta que este revisor apruebe la evidencia actual del worktree.')}</p>}
                     {reviewNotice && <p className="review-notice" role="status">{reviewNotice}</p>}
@@ -5057,8 +5299,8 @@ function RunMonitor({ run, providers = [], onClose, onOpenRun = null, copy = dic
               {canMerge && (
                 <div className="merge-approval-banner">
                   <div>
-                    <strong style={{ display: 'block', fontSize: 13, color: '#166534' }}>{copy.verifiedReady}</strong>
-                    <span style={{ fontSize: 11.5, color: '#15803d' }}>{copy.verifiedReadyDesc}</span>
+                    <strong style={{ display: 'block', fontSize: 13, color: '#166534' }}>{reviewRequired ? localeText('Review approved · final re-check on merge', 'Revisión aprobada · comprobación final al fusionar') : copy.verifiedReady}</strong>
+                    <span style={{ fontSize: 11.5, color: '#15803d' }}>{reviewRequired ? localeText('Orbit will verify the current worktree fingerprint and evidence coverage again before merging.', 'Orbit volverá a verificar la huella del worktree y la cobertura de evidencia antes de fusionar.') : copy.verifiedReadyDesc}</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button

@@ -6,7 +6,16 @@ const codeRun = {
   status: 'awaiting_review',
   gateStatus: 'verified_ready',
   branch: 'orbit/run-1',
-  worktreePath: '/tmp/orbit-run-1'
+  worktreePath: '/tmp/orbit-run-1',
+  verification: {
+    version: 1,
+    algorithm: 'sha256',
+    fingerprint: 'a'.repeat(64),
+    finalTreeHash: 'd'.repeat(40),
+    policyHash: 'e'.repeat(64),
+    baseCommit: 'b'.repeat(40),
+    headCommit: 'c'.repeat(40)
+  }
 };
 
 describe('Executive Inbox safety', () => {
@@ -51,5 +60,25 @@ describe('Merge gate', () => {
     const result = mergeEligibility(run);
     expect(result.ok).toBe(false);
     expect(result.error).toContain(message);
+  });
+
+  it.each([
+    ['legacy missing evidence', undefined],
+    ['null evidence', null],
+    ['unknown evidence version', { ...codeRun.verification, version: 2 }],
+    ['wrong algorithm', { ...codeRun.verification, algorithm: 'sha1' }],
+    ['missing fingerprint', { ...codeRun.verification, fingerprint: undefined }],
+    ['truncated fingerprint', { ...codeRun.verification, fingerprint: 'a'.repeat(16) }],
+    ['non-string fingerprint', { ...codeRun.verification, fingerprint: ['a'.repeat(64)] }],
+    ['missing verified base', { ...codeRun.verification, baseCommit: undefined }],
+    ['missing verified head', { ...codeRun.verification, headCommit: undefined }],
+    ['missing verified tree', { ...codeRun.verification, finalTreeHash: undefined }],
+    ['missing policy hash', { ...codeRun.verification, policyHash: undefined }],
+    ['unresolved head reference', { ...codeRun.verification, headCommit: 'HEAD' }]
+  ])('requires re-verification for %s', (_label, verification) => {
+    const result = mergeEligibility({ ...codeRun, verification });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(409);
+    expect(result.error).toContain('Re-verify');
   });
 });

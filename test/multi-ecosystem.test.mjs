@@ -34,7 +34,7 @@ describe('Completion Gate across ecosystems', () => {
     expect(run.gateChecks.error).toMatch(/AssertionError|FAILED/);
     // __pycache__ folders from the checks are not the agent's work.
     expect(existsSync(join(worktreePath, '__pycache__'))).toBe(false);
-    expect(run.gateArtifacts).toContain('__pycache__');
+    expect(run.gateArtifacts.some(path => path.startsWith('__pycache__/'))).toBe(true);
   }, TIMEOUT);
 
   it.runIf(available('go'))('builds and tests a Go module', async () => {
@@ -62,9 +62,50 @@ describe('Completion Gate across ecosystems', () => {
   it('says plainly when nothing could be verified', async () => {
     const { id } = await fixture({ 'notes.txt': 'hello\n' }, worktree => write(worktree, 'notes.txt', 'hello again\n'));
     const run = await verify(id);
-    expect(run.gateMessage).toMatch(/nothing was verified automatically/);
+    expect(run.gateMessage).toMatch(/no executable build, test, or visual check/i);
+    expect(run.status).toBe('awaiting_review');
     expect(run.gateStatus).toBe('needs_attention');
-    expect(run.gateChecks.unavailable).toBe(true);
+    expect(run.verification).toBeUndefined();
+
+    const inbox = await (await fetch(`${base}/api/inbox`)).json();
+    expect(inbox.items.find(item => item.id === id)).toMatchObject({ gateStatus: 'needs_attention', mergeable: false });
+    const merge = await fetch(`${base}/api/runs/${id}/merge`, { method: 'POST' });
+    expect(merge.status).toBe(409);
+  }, TIMEOUT);
+
+  it('preserves a failed Completion Gate as a failed pipeline audit stage', async () => {
+    const { id } = await fixture(
+      { 'package.json': JSON.stringify({ name: 'pipeline-failure', scripts: { build: 'node -e "process.exit(1)"' } }) },
+      worktree => write(worktree, 'feature.txt', 'pipeline output\n'),
+      {
+        run: {
+          provider: 'gemini',
+          gateStatus: 'needs_attention',
+          pipeline: true,
+          pipelineStages: [
+            { id: 'plan', status: 'completed' },
+            { id: 'code', status: 'completed' },
+            { id: 'audit', status: 'running' }
+          ]
+        }
+      }
+    );
+    const run = await verify(id);
+    expect(run.gateStatus).toBe('needs_attention');
+    expect(run.pipelineStages.find(stage => stage.id === 'audit')).toMatchObject({ status: 'failed', gateStatus: 'needs_attention' });
+    expect(run.result).toMatch(/Completion Gate requires attention/);
+  }, TIMEOUT);
+
+  it('fails closed when a changed Git filename contains control characters', async () => {
+    const { id } = await fixture(
+      { 'notes.txt': 'safe\n' },
+      worktree => write(worktree, 'package.json\nforged', '{"dependencies":{"hidden":"1.0.0"}}\n')
+    );
+    const run = await verify(id);
+    expect(run.status).toBe('awaiting_review');
+    expect(run.gateStatus).toBe('needs_attention');
+    expect(run.gateMessage).toMatch(/cannot safely review the changed filename|could not finish/i);
+    expect(run.verification).toBeUndefined();
   }, TIMEOUT);
 });
 

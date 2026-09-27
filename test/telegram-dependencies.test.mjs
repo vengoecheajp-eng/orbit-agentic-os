@@ -91,10 +91,11 @@ describe('Dependency decisions from Telegram', () => {
     await waitFor(() => telegram.sent.find(message => message.text.includes('changed since that message')));
 
     telegram.send(command);
-    const verified = await waitForRun(base, id, run => run.status === 'awaiting_review', 60000);
-    expect(verified.gateStatus, verified.gateMessage).toBe('needs_attention');
-    expect(verified.gateChecks.unavailable).toBe(true);
-    expect(verified.dependencyApproval.via).toBe('telegram');
-    expect(verified.dependencyApproval.acceptedHashes).toContain(paused.dependencyRequest.hash);
+    const reviewed = await waitForRun(base, id, run => run.status === 'awaiting_review', 60000);
+    expect(reviewed.gateStatus, reviewed.gateMessage).toBe('needs_attention');
+    expect(reviewed.gateMessage).toMatch(/no executable build, test, or visual check/i);
+    expect(reviewed.verification).toBeUndefined();
+    expect(reviewed.dependencyApproval.via).toBe('telegram');
+    expect(reviewed.dependencyApproval.acceptedHashes).toContain(paused.dependencyRequest.hash);
   }, 90000);
 });
