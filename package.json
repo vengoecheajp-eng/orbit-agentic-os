@@ -30,7 +30,7 @@
     "security:check": "npm audit --omit=dev && npm run release:check"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "^6.1.2",
     "express": "^5.2.1",
     "lucide-react": "^1.47.0",
     "react": "^19.3.0",
